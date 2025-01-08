@@ -540,6 +540,43 @@ BOOL CAddressBar::GetCurrentAddressText(CComHeapPtr<WCHAR> &pszText)
 	return ::GetWindowTextW(m_comboBoxEditCtl, pszText, cchMax);
 }
 
+HRESULT STDMETHODCALLTYPE CAddressBar::ShowFileNotFoundError(HRESULT hRet)
+{
+	CComHeapPtr<WCHAR> input;
+	if (!GetCurrentAddressText(input))
+		return E_FAIL;
+
+
+	WCHAR szFormat[512];
+	WCHAR szMessage[1024];
+	WCHAR szTitle[512];
+	HINSTANCE hInst = _AtlBaseModule.GetModuleInstance();
+	if (m_theme == CLASSIC_EXPLORER_2K)
+	{
+		LoadStringW(hInst, IDS_NOTFOUND_TEXT_2K, szFormat, 512);
+		LoadStringW(hInst, IDS_NOTFOUND_TITLE_2K, szTitle, 512);
+	}
+	else
+	{
+		LoadStringW(hInst, IDS_NOTFOUND_TEXT_XP, szFormat, 512);
+		LoadStringW(hInst, IDS_NOTFOUND_TITLE_XP, szTitle, 512);
+
+		// The XP error is from IE, and shows a file:// URI.
+		// Swap out \ for /.
+		int len = wcslen(input);
+		for (int i = 0; i < len; i++)
+		{
+			if (input[i] == L'\\')
+				input[i] = L'/';
+		}
+	}
+
+	swprintf_s(szMessage, szFormat, input);
+	::MessageBoxW(m_comboBoxEditCtl, szMessage, szTitle, MB_OK | MB_ICONERROR);
+
+	return hRet;
+}
+
 /*
  * Execute: Perform the browse action with the requested address.
  */
@@ -561,8 +598,7 @@ HRESULT CAddressBar::Execute()
 		if (SUCCEEDED(ExecuteCommandLine()))
 			return S_OK;
 
-		// TODO: file not found message box:
-		return E_FAIL;
+		return ShowFileNotFoundError(hr);
 	}
 
 	if (!parsedPidl)

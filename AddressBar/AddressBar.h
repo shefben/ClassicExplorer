@@ -61,6 +61,7 @@ class CAddressBar : public CWindowImpl<CAddressBar>
 		HRESULT HandleNavigate();
 		HRESULT RefreshCurrentAddress();
 		BOOL GetCurrentAddressText(CComHeapPtr<WCHAR> &pszText);
+		HRESULT STDMETHODCALLTYPE ShowFileNotFoundError(HRESULT hRet);
 		HRESULT Execute();
 
 	protected: // Message handlers:
