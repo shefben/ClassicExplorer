@@ -22,16 +22,10 @@ class ATL_NO_VTABLE CAddressBarHostBand :
 	protected: // Class members:
 		IInputObjectSite *m_pSite = NULL;
 		HWND m_parentWindow = NULL;
-		CAddressBar m_addressBar;
-		CComPtr<IWebBrowser2> m_pWebBrowser = NULL;
-		static std::wstring m_addressText;
+                CAddressBar m_addressBar;
+                CComPtr<IWebBrowser2> m_pWebBrowser = NULL;
 
-		friend class CAddressBar;
-
-	protected: // Internal methods:
-		WCHAR GetAddressAccelerator();
-
-	public: // COM class setup:
+        public: // COM class setup:
 		DECLARE_REGISTRY_RESOURCEID_V2_WITHOUT_MODULE(IDR_CLASSICEXPLORER, CAddressBarHostBand)
 
 		BEGIN_SINK_MAP(CAddressBarHostBand)
@@ -59,7 +53,7 @@ class ATL_NO_VTABLE CAddressBarHostBand :
 	public: // COM method implementations:
 		
 		// implement IDeskBand:
-		STDMETHOD(GetBandInfo)(DWORD dwBandId, DWORD dwViewMode, DESKBANDINFO *pDbi);
+                STDMETHOD(GetBandInfo)(DWORD dwBandId, DWORD dwViewMode, DESKBANDINFO *pDbi);
 
 		// implement IObjectWithSite:
 		STDMETHOD(SetSite)(IUnknown *pUnkSite);

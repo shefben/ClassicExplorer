@@ -13,11 +13,18 @@ namespace CEUtil
 
 CESettings GetCESettings()
 {
-	bool fShowGoButton = true;
-	bool fShowAddressLabel = true;
-	bool fShowFullAddress = true;
+        bool fShowGoButton = true;
+        bool fShowAddressLabel = true;
+        bool fShowFullAddress = true;
+        bool fTabAutoSize = true;
+        DWORD dwFixedTabWidth = 180;
+        DWORD dwFixedTabHeight = 32;
+        DWORD dwShowGoButton = 1;
+        DWORD dwShowAddressLabel = 1;
+        DWORD dwShowFullAddress = 1;
+        DWORD dwTabAutoSize = 1;
 
-	ClassicExplorerTheme theme = CLASSIC_EXPLORER_2K;
+        ClassicExplorerTheme theme = CLASSIC_EXPLORER_2K;
 	HKEY hKey;
 	LSTATUS ls = RegOpenKeyExW(HKEY_CURRENT_USER, CE_REGISTRY_PATH, 0, KEY_READ, &hKey);
 	if (ls != ERROR_SUCCESS)
@@ -33,11 +40,14 @@ CESettings GetCESettings()
 		// Write default values and return default settings
 		WCHAR themeDef[] = L"2K";
 		RegSetValueExW(hKey, L"Theme", 0, REG_SZ, (BYTE*)themeDef, 4);
-		RegSetValueExW(hKey, L"ShowGoButton", 0, REG_DWORD, (BYTE*)&fShowGoButton, 4);
-		RegSetValueExW(hKey, L"ShowAddressLabel", 0, REG_DWORD, (BYTE*)&fShowAddressLabel, 4);
-		RegSetValueExW(hKey, L"ShowFullAddress", 0, REG_DWORD, (BYTE*)&fShowFullAddress, 4);
-		return CESettings(CLASSIC_EXPLORER_2K, 1, 1,1);
-	}
+                RegSetValueExW(hKey, L"ShowGoButton", 0, REG_DWORD, (BYTE*)&dwShowGoButton, sizeof(DWORD));
+                RegSetValueExW(hKey, L"ShowAddressLabel", 0, REG_DWORD, (BYTE*)&dwShowAddressLabel, sizeof(DWORD));
+                RegSetValueExW(hKey, L"ShowFullAddress", 0, REG_DWORD, (BYTE*)&dwShowFullAddress, sizeof(DWORD));
+                RegSetValueExW(hKey, L"TabAutoSize", 0, REG_DWORD, (BYTE*)&dwTabAutoSize, sizeof(DWORD));
+                RegSetValueExW(hKey, L"TabFixedWidth", 0, REG_DWORD, (BYTE*)&dwFixedTabWidth, sizeof(DWORD));
+                RegSetValueExW(hKey, L"TabFixedHeight", 0, REG_DWORD, (BYTE*)&dwFixedTabHeight, sizeof(DWORD));
+                return CESettings(CLASSIC_EXPLORER_2K, 1, 1,1, 1, dwFixedTabWidth, dwFixedTabHeight);
+        }
 	// Read settings
 	//WCHAR themeRead[8];
 	WCHAR themeRead[9];
@@ -58,14 +68,34 @@ CESettings GetCESettings()
 		theme = CLASSIC_EXPLORER_10;
 	}
 	
-	DWORD dwValueSize = sizeof(DWORD);
-	RegGetValueW(hKey, NULL, L"ShowGoButton", RRF_RT_REG_DWORD, NULL, &fShowGoButton, &dwValueSize);
-	RegGetValueW(hKey, NULL, L"ShowAddressLabel", RRF_RT_REG_DWORD, NULL, &fShowAddressLabel, &dwValueSize);
-	RegGetValueW(hKey, NULL, L"ShowFullAddress", RRF_RT_REG_DWORD, NULL, &fShowFullAddress, &dwValueSize);
+        DWORD dwValueSize = sizeof(DWORD);
+        DWORD dwValue = 0;
+        if (RegGetValueW(hKey, NULL, L"ShowGoButton", RRF_RT_REG_DWORD, NULL, &dwValue, &dwValueSize) == ERROR_SUCCESS)
+                fShowGoButton = dwValue != 0;
+        dwValueSize = sizeof(DWORD);
+        if (RegGetValueW(hKey, NULL, L"ShowAddressLabel", RRF_RT_REG_DWORD, NULL, &dwValue, &dwValueSize) == ERROR_SUCCESS)
+                fShowAddressLabel = dwValue != 0;
+        dwValueSize = sizeof(DWORD);
+        if (RegGetValueW(hKey, NULL, L"ShowFullAddress", RRF_RT_REG_DWORD, NULL, &dwValue, &dwValueSize) == ERROR_SUCCESS)
+                fShowFullAddress = dwValue != 0;
+        dwValueSize = sizeof(DWORD);
+        if (RegGetValueW(hKey, NULL, L"TabAutoSize", RRF_RT_REG_DWORD, NULL, &dwValue, &dwValueSize) == ERROR_SUCCESS)
+                fTabAutoSize = dwValue != 0;
+        dwValueSize = sizeof(DWORD);
+        RegGetValueW(hKey, NULL, L"TabFixedWidth", RRF_RT_REG_DWORD, NULL, &dwFixedTabWidth, &dwValueSize);
+        dwValueSize = sizeof(DWORD);
+        RegGetValueW(hKey, NULL, L"TabFixedHeight", RRF_RT_REG_DWORD, NULL, &dwFixedTabHeight, &dwValueSize);
 
-	RegCloseKey(hKey);
+        RegCloseKey(hKey);
 
-	return CESettings(theme, fShowGoButton, fShowAddressLabel, fShowFullAddress);
+        return CESettings(
+                theme,
+                fShowGoButton,
+                fShowAddressLabel,
+                fShowFullAddress,
+                fTabAutoSize,
+                dwFixedTabWidth,
+                dwFixedTabHeight);
 }
 
 void WriteCESettings(CESettings& toWrite)
@@ -82,10 +112,10 @@ void WriteCESettings(CESettings& toWrite)
 		// Open the new key with write access
 		RegOpenKeyExW(HKEY_CURRENT_USER, CE_REGISTRY_PATH, 0, KEY_WRITE, &hKey);
 	}
-	if (toWrite.theme != CLASSIC_EXPLORER_NONE)
-	{
-		WCHAR theme[] = L"2K";
-		if (toWrite.theme == CLASSIC_EXPLORER_XP)
+        if (toWrite.theme != CLASSIC_EXPLORER_NONE)
+        {
+                WCHAR theme[] = L"2K";
+                if (toWrite.theme == CLASSIC_EXPLORER_XP)
 			wcscpy_s(theme, L"XP");
 		if (toWrite.theme == CLASSIC_EXPLORER_MEMPHIS)
 			wcscpy_s(theme, L"98");
@@ -93,19 +123,37 @@ void WriteCESettings(CESettings& toWrite)
 			wcscpy_s(theme, L"10");
 		RegSetValueExW(hKey, L"Theme", 0, REG_SZ, (BYTE*)theme, 4);
 	}
-	if (toWrite.showGoButton != -1)
-	{
-		RegSetValueExW(hKey, L"ShowGoButton", 0, REG_DWORD, (BYTE*)&toWrite.showGoButton, 4);
-	}
-	if (toWrite.showAddressLabel != -1)
-	{
-		RegSetValueExW(hKey, L"ShowAddressLabel", 0, REG_DWORD, (BYTE*)&toWrite.showAddressLabel, 4);
-	}
-	if (toWrite.showFullAddress != -1)
-	{
-		RegSetValueExW(hKey, L"ShowFullAddress", 0, REG_DWORD, (BYTE*)&toWrite.showFullAddress, 4);
-	}
-	RegCloseKey(hKey);
+        if (toWrite.showGoButton != -1)
+        {
+                DWORD dwValue = static_cast<DWORD>(toWrite.showGoButton);
+                RegSetValueExW(hKey, L"ShowGoButton", 0, REG_DWORD, (BYTE*)&dwValue, sizeof(DWORD));
+        }
+        if (toWrite.showAddressLabel != -1)
+        {
+                DWORD dwValue = static_cast<DWORD>(toWrite.showAddressLabel);
+                RegSetValueExW(hKey, L"ShowAddressLabel", 0, REG_DWORD, (BYTE*)&dwValue, sizeof(DWORD));
+        }
+        if (toWrite.showFullAddress != -1)
+        {
+                DWORD dwValue = static_cast<DWORD>(toWrite.showFullAddress);
+                RegSetValueExW(hKey, L"ShowFullAddress", 0, REG_DWORD, (BYTE*)&dwValue, sizeof(DWORD));
+        }
+        if (toWrite.tabAutoSize != -1)
+        {
+                DWORD dwValue = static_cast<DWORD>(toWrite.tabAutoSize);
+                RegSetValueExW(hKey, L"TabAutoSize", 0, REG_DWORD, (BYTE*)&dwValue, sizeof(DWORD));
+        }
+        if (toWrite.tabFixedWidth != -1)
+        {
+                DWORD dwValue = static_cast<DWORD>(toWrite.tabFixedWidth);
+                RegSetValueExW(hKey, L"TabFixedWidth", 0, REG_DWORD, (BYTE*)&dwValue, sizeof(DWORD));
+        }
+        if (toWrite.tabFixedHeight != -1)
+        {
+                DWORD dwValue = static_cast<DWORD>(toWrite.tabFixedHeight);
+                RegSetValueExW(hKey, L"TabFixedHeight", 0, REG_DWORD, (BYTE*)&dwValue, sizeof(DWORD));
+        }
+        RegCloseKey(hKey);
 }
 
 /*

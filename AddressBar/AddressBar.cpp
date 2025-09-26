@@ -1,846 +1,1317 @@
-/*
- * AddressBar.cpp: Implements the address bar toolbar.
- */
-
 #include "stdafx.h"
 #include "framework.h"
 #include "resource.h"
 #include "ClassicExplorer_i.h"
 #include "dllmain.h"
-#include <commoncontrols.h>
-#include "util/shell_helpers.h"
-#include "util/util.h"
 
 #include "AddressBar.h"
-#include "winreg.h"
 
-std::wstring CAddressBar::m_goText = L"";
+#include "util/shell_helpers.h"
 
-/*
- * OnCreate: Handle the WM_CREATE message sent out and create the address bar controls.
- */
-LRESULT CAddressBar::OnCreate(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHandled)
+#include <shobjidl.h>
+
+#include <algorithm>
+#include <array>
+#include <numeric>
+
+namespace
 {
-	HINSTANCE moduleInstance = _AtlBaseModule.GetModuleInstance();
+        const std::array<COLORREF, 8> kDefaultGroupPalette = {
+                RGB(180, 200, 235),
+                RGB(190, 220, 180),
+                RGB(230, 205, 175),
+                RGB(210, 185, 230),
+                RGB(200, 200, 200),
+                RGB(180, 215, 215),
+                RGB(235, 190, 190),
+                RGB(200, 210, 165)
+        };
 
-	m_showGoButton = true;
+        int GetSystemDragThresholdX()
+        {
+                return GetSystemMetrics(SM_CXDRAG);
+        }
 
-	CEUtil::CESettings cS = CEUtil::GetCESettings();
-	m_showGoButton = cS.showGoButton;
-	m_theme = cS.theme;
-
-	if (m_goText == L"")
-	{
-		HMODULE explorerframe = LoadLibrary(L"explorerframe.dll");
-		if (explorerframe)
-		{
-			WCHAR* goText = new WCHAR[32];
-			LoadStringW(explorerframe, 12656, goText, 32);
-			m_goText = goText;
-			delete[] goText;
-			FreeLibrary(explorerframe);
-
-			m_goText.erase(m_goText.begin());
-			auto it = m_goText.begin();
-			while (it != m_goText.end())
-			{
-				if (*it == L' ')
-				{
-					m_goText.erase(it, m_goText.end());
-					break;
-				}
-				++it;
-			}
-		}
-		else
-			m_goText = L"Go";
-	}
-
-	m_toolbar = CreateWindowEx(
-		WS_EX_TOOLWINDOW,
-		WC_COMBOBOXEXW,
-		NULL,
-		WS_CHILD | WS_CLIPCHILDREN | WS_VISIBLE | WS_TABSTOP | CCS_NODIVIDER | CCS_NOMOVEY | CBS_OWNERDRAWFIXED,
-		0, 0, 500, 250,
-		m_hWnd,
-		NULL,
-		moduleInstance,
-		NULL
-	);
-
-	if (m_toolbar == NULL)
-	{
-		return E_FAIL;
-	}
-
-	SetWindowSubclass(m_toolbar, ComboboxSubclassProc, (UINT_PTR)this, (DWORD_PTR)this);
-
-	::SendMessageW(m_toolbar, CB_SETITEMHEIGHT, -1, 16);
-	::SendMessageW(
-		m_toolbar,
-		CBEM_SETEXTENDEDSTYLE,
-		CBES_EX_CASESENSITIVE | CBES_EX_NOSIZELIMIT,
-		CBES_EX_CASESENSITIVE | CBES_EX_NOSIZELIMIT
-	);
-	m_comboBox = (HWND)::SendMessageW(m_toolbar, CBEM_GETCOMBOCONTROL, 0, 0);
-	m_comboBoxEditCtl = (HWND)::SendMessageW(m_toolbar, CBEM_GETEDITCONTROL, 0, 0);
-
-	SetWindowSubclass(m_comboBox, RealComboboxSubclassProc, (UINT_PTR)this, (DWORD_PTR)this);
-	SetWindowSubclass(m_comboBoxEditCtl, RealComboboxSubclassProc, (UINT_PTR)this, (DWORD_PTR)this);
-
-	// Set the address bar combobox to use the shell image list.
-	// This is required in order for icons to be able to render in the address bar.
-	IImageList *piml;
-	SHGetImageList(SHIL_SMALL, IID_IImageList, (void**)&piml);
-	if (piml)
-	{
-		::SendMessageW(
-			m_toolbar,
-			CBEM_SETIMAGELIST,
-			0,
-			(LPARAM)piml
-		);
-	}
-
-	// Provides autocomplete capabilities to the combobox editor.
-	// This is a standard shell API, surprisingly enough.
-	SHAutoComplete(m_comboBoxEditCtl, SHACF_FILESYSTEM | SHACF_URLALL | SHACF_USETAB);
-
-	if (m_showGoButton)
-	{
-		CreateGoButton();
-	}
-
-	return S_OK;
+        int GetSystemDragThresholdY()
+        {
+                return GetSystemMetrics(SM_CYDRAG);
+        }
 }
 
-/*
- * CreateGoButton: Creates the control window for the "Go" button.
- * 
- * TODO: Implement the ability to properly toggle this feature.
- */
-LRESULT CAddressBar::CreateGoButton()
+// ============================================================================
+// ExplorerTabDropTarget
+// ============================================================================
+
+ExplorerTabDropTarget::ExplorerTabDropTarget(CAddressBar *owner) : m_owner(owner)
 {
-	HINSTANCE moduleInstance = _AtlBaseModule.GetModuleInstance();
-
-	const TBBUTTON goButtonInfo[] = { {0, 1, TBSTATE_ENABLED, 0} };
-	HINSTANCE resourceInstance = _AtlBaseModule.GetResourceInstance();
-	int go_inactive_bitmap = IDB_10_GO_INACTIVE;
-	int go_active_bitmap = IDB_10_GO_ACTIVE;
-
-	if (m_theme == CLASSIC_EXPLORER_MEMPHIS)
-	{
-		go_inactive_bitmap = IDB_MEMPHIS_GO_INACTIVE;
-		go_active_bitmap = IDB_MEMPHIS_GO_ACTIVE;
-	}
-	else if (m_theme == CLASSIC_EXPLORER_2K)
-	{
-		go_inactive_bitmap = IDB_2K_GO_INACTIVE;
-		go_active_bitmap = IDB_2K_GO_ACTIVE;
-	}
-	else if (m_theme == CLASSIC_EXPLORER_XP)
-	{
-		go_inactive_bitmap = IDB_XP_GO_INACTIVE;
-		go_active_bitmap = IDB_XP_GO_ACTIVE;
-	}
-
-	m_himlGoInactive = ImageList_LoadImageW(
-		resourceInstance,
-		MAKEINTRESOURCEW(go_inactive_bitmap),
-		m_theme == CLASSIC_EXPLORER_MEMPHIS ? 18 : 20,
-		0,
-		RGB(0, 0, 0),
-		IMAGE_BITMAP,
-		LR_CREATEDIBSECTION
-	);
-
-	m_himlGoActive = ImageList_LoadImageW(
-		resourceInstance,
-		MAKEINTRESOURCEW(go_active_bitmap),
-		m_theme == CLASSIC_EXPLORER_MEMPHIS ? 18 : 20,
-		0,
-		RGB(0, 0, 0),
-		IMAGE_BITMAP,
-		LR_CREATEDIBSECTION
-	);
-
-	m_goButton = CreateWindowEx(
-		WS_EX_TOOLWINDOW,
-		TOOLBARCLASSNAMEW,
-		NULL,
-		WS_CHILD | WS_CLIPSIBLINGS | WS_CLIPCHILDREN | TBSTYLE_LIST | TBSTYLE_FLAT | TBSTYLE_TOOLTIPS |
-		CCS_NODIVIDER | CCS_NOPARENTALIGN | CCS_NORESIZE,
-		0,
-		0,
-		50,
-		50,
-		m_toolbar,
-		NULL,
-		moduleInstance,
-		NULL
-	);
-
-	if (!m_goButton)
-	{
-		return E_FAIL;
-	}
-
-	::SendMessage(m_goButton, TB_BUTTONSTRUCTSIZE, sizeof(TBBUTTON), 0); // 1 button
-	::SendMessage(m_goButton, TB_SETMAXTEXTROWS, 1, 0);
-
-	if (m_himlGoInactive)
-		::SendMessage(m_goButton, TB_SETIMAGELIST, 0, (LPARAM)m_himlGoInactive);
-
-	if (m_himlGoActive)
-		::SendMessage(m_goButton, TB_SETHOTIMAGELIST, 0, (LPARAM)m_himlGoActive);
-
-	WCHAR pwszGoLabel[255];
-
-	::SendMessage(m_goButton, TB_ADDSTRINGW, 0, (LPARAM)m_goText.c_str());
-
-	// add the go button:
-	::SendMessage(m_goButton, TB_ADDBUTTONSW, 1, (LPARAM)&goButtonInfo);
-	::SendMessage(m_goButton, TB_AUTOSIZE, 0, 0);
-	::ShowWindow(m_goButton, TRUE);
-
-	return S_OK;
 }
 
-/*
- * InitComboBox: Initialise the address bar combobox.
- * 
- * This is only called once every time a new explorer window is opened.
- */
-HRESULT CAddressBar::InitComboBox()
+IFACEMETHODIMP ExplorerTabDropTarget::QueryInterface(REFIID riid, void **ppvObject)
 {
-	RefreshCurrentAddress();
+        if (!ppvObject)
+                return E_POINTER;
 
-	return S_OK;
+        if (riid == IID_IUnknown || riid == IID_IDropTarget)
+        {
+                *ppvObject = static_cast<IDropTarget *>(this);
+                AddRef();
+                return S_OK;
+        }
+
+        *ppvObject = nullptr;
+        return E_NOINTERFACE;
 }
 
-/*
- * OnDestroy: Handle WM_DESTROY messages.
- */
-LRESULT CAddressBar::OnDestroy(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHandled)
+ULONG ExplorerTabDropTarget::AddRef()
 {
-	return 0;
+        return InterlockedIncrement(&m_refCount);
 }
 
-/*
- * OnComponentNotifyClick: Handle click events sent out to other components:
- *                         notably, the go button.
- */
-LRESULT CAddressBar::OnComponentNotifyClick(WPARAM wParam, LPNMHDR notifyHeader, BOOL &bHandled)
+ULONG ExplorerTabDropTarget::Release()
 {
-	if (notifyHeader->hwndFrom == m_goButton)
-	{
-		this->Execute();
-	}
-
-	return 0;
+        LONG ref = InterlockedDecrement(&m_refCount);
+        if (ref == 0)
+        {
+                delete this;
+        }
+        return static_cast<ULONG>(ref);
 }
 
-/*
- * OnNotify: Handle WM_NOTIFY messages.
- * 
- * This is used in order to respond to events sent out from the combobox for UX
- * reasons, such as switching the display text with the full path when clicked.
- */
-LRESULT CAddressBar::OnNotify(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHandled)
+IFACEMETHODIMP ExplorerTabDropTarget::DragEnter(IDataObject *pDataObject, DWORD grfKeyState, POINTL pt, DWORD *pdwEffect)
 {
-	LPNMHDR hdr = (LPNMHDR)lParam;
+        if (!pdwEffect)
+                return E_INVALIDARG;
 
-	if (hdr->code == CBEN_ENDEDITW)
-	{
-		NMCBEENDEDITW *endEdit = (NMCBEENDEDITW *)lParam;
-		if (endEdit->iWhy == CBENF_RETURN)
-		{
-			this->Execute();
-		}
-		else if (endEdit->iWhy = CBENF_ESCAPE)
-		{
-			RefreshCurrentAddress();
-		}
-	}
-	else if (hdr->code == CBEN_BEGINEDIT)
-	{
-		//PNMCBEENDEDITW *beginEdit = (PNMCBEENDEDITW *)lParam;
+        m_currentDataObject = pDataObject;
+        if (!m_owner || !m_owner->CanAcceptDataObject(pDataObject))
+        {
+                *pdwEffect = DROPEFFECT_NONE;
+                return S_OK;
+        }
 
-		if (m_locationHasPhysicalPath)
-		{
-			::SetWindowTextW(m_comboBoxEditCtl, m_currentPath);
-			::SendMessageW(m_comboBoxEditCtl, EM_SETSEL, 0, -1);
-		}
-	}
-
-	return S_OK;
+        *pdwEffect = (grfKeyState & MK_SHIFT) ? DROPEFFECT_MOVE : DROPEFFECT_COPY;
+        if (m_owner)
+        {
+                m_owner->HandleExternalDragEnter(grfKeyState, pt, pDataObject);
+        }
+        return S_OK;
 }
 
-/*
- * ComboboxSubclassProc: Overrides the handling of messages sent to the combobox.
- * 
- * This is used for properly sizing and positioning the address bar controls,
- * among other things.
- */
-LRESULT CALLBACK CAddressBar::ComboboxSubclassProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam, UINT_PTR uIdSubclass, DWORD_PTR dwRefData)
+IFACEMETHODIMP ExplorerTabDropTarget::DragOver(DWORD grfKeyState, POINTL pt, DWORD *pdwEffect)
 {
-	CAddressBar *self = (CAddressBar *)dwRefData;
+        if (!pdwEffect)
+                return E_INVALIDARG;
 
-	if (uMsg == WM_SIZE || uMsg == WM_WINDOWPOSCHANGING)
-	{
-		RECT rcGoButton;
-		RECT rcComboBox;
-		RECT rcRefresh;
+        if (!m_owner || !m_owner->CanAcceptDataObject(m_currentDataObject))
+        {
+                *pdwEffect = DROPEFFECT_NONE;
+                return S_OK;
+        }
 
-		long newHeight;
-		long newWidth;
-
-		if (uMsg == WM_SIZE)
-		{
-			newHeight = HIWORD(lParam);
-			newWidth = LOWORD(lParam);
-		}
-		else if (uMsg == WM_WINDOWPOSCHANGING)
-		{
-			WINDOWPOS pos = *(WINDOWPOS *)lParam;
-			newHeight = pos.cy;
-			newWidth = pos.cx;
-		}
-
-		// Declare margins:
-		constexpr int addressRightMargin = 2;
-		int goRightMargin = 0; // Assuming go button is not displayed.
-
-		long goButtonWidth = 0;
-		long goButtonHeight = 0;
-		if (self->m_showGoButton)
-		{
-			::SendMessageW(self->m_goButton, TB_GETITEMRECT, 0, (LPARAM)&rcGoButton);
-			goButtonWidth = rcGoButton.right - rcGoButton.left;
-			goButtonHeight = rcGoButton.bottom - rcGoButton.top;
-
-			// Set the right margin of the go button to also display.
-			goRightMargin = 2;
-		}
-
-		if (uMsg == WM_SIZE)
-		{
-			DefSubclassProc(hWnd, WM_SIZE, wParam, MAKELONG(newWidth - goButtonWidth - 2, newHeight));
-		}
-		else if (uMsg == WM_WINDOWPOSCHANGING)
-		{
-			WINDOWPOS pos = *(WINDOWPOS *)lParam;
-			pos.cx = newWidth - addressRightMargin - goButtonWidth - goRightMargin;
-
-			DefSubclassProc(hWnd, WM_WINDOWPOSCHANGING, wParam, (LPARAM)&pos);
-		}
-
-		if (self->m_showGoButton)
-		{
-			::GetWindowRect(self->m_comboBox, &rcComboBox);
-			::SetWindowPos(
-				self->m_goButton,
-				NULL,
-				newWidth - goButtonWidth - goRightMargin,
-				(rcComboBox.bottom - rcComboBox.top - goButtonHeight) / 2,
-				goButtonWidth,
-				goButtonHeight,
-				SWP_NOOWNERZORDER | SWP_SHOWWINDOW | SWP_NOACTIVATE | SWP_NOZORDER
-			);
-		}
-
-		return 0;
-	}
-	else if (uMsg == WM_ERASEBKGND)
-	{
-		POINT pt = { 0, 0 }, ptOrig;
-		HWND parentWindow = self->GetParent();
-		::MapWindowPoints(hWnd, parentWindow, &pt, 1);
-		OffsetWindowOrgEx((HDC)wParam, pt.x, pt.y, &ptOrig);
-
-		LRESULT result = SendMessage(parentWindow, WM_ERASEBKGND, wParam, 0);
-		SetWindowOrgEx((HDC)wParam, ptOrig.x, ptOrig.y, NULL);
-
-		return result;
-	}
-
-	return DefSubclassProc(hWnd, uMsg, wParam, lParam);
+        *pdwEffect = (grfKeyState & MK_SHIFT) ? DROPEFFECT_MOVE : DROPEFFECT_COPY;
+        m_owner->HandleExternalDragOver(grfKeyState, pt);
+        return S_OK;
 }
 
-/*
- * RealComboboxSubclassProc: todo?
- */
-LRESULT CALLBACK CAddressBar::RealComboboxSubclassProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam, UINT_PTR uIdSubclass, DWORD_PTR dwRefData)
+IFACEMETHODIMP ExplorerTabDropTarget::DragLeave()
 {
-	CAddressBar *self = (CAddressBar *)dwRefData;
-
-	return DefSubclassProc(hWnd, uMsg, wParam, lParam);
+        if (m_owner)
+        {
+                m_owner->HandleExternalDragLeave();
+        }
+        m_currentDataObject.Release();
+        return S_OK;
 }
 
-/*
- * SetBrowsers: Set the browser interfaces to use for navigation purposes.
- */
+IFACEMETHODIMP ExplorerTabDropTarget::Drop(IDataObject *pDataObject, DWORD grfKeyState, POINTL pt, DWORD *pdwEffect)
+{
+        if (!pdwEffect)
+                return E_INVALIDARG;
+
+        if (!m_owner || !m_owner->CanAcceptDataObject(pDataObject))
+        {
+                *pdwEffect = DROPEFFECT_NONE;
+                return S_OK;
+        }
+
+        *pdwEffect = (grfKeyState & MK_SHIFT) ? DROPEFFECT_MOVE : DROPEFFECT_COPY;
+        m_owner->HandleExternalDrop(pDataObject, grfKeyState, pt);
+        m_currentDataObject.Release();
+        return S_OK;
+}
+
+// ============================================================================
+// CAddressBar implementation
+// ============================================================================
+
 void CAddressBar::SetBrowsers(CComPtr<IShellBrowser> pShellBrowser, CComPtr<IWebBrowser2> pWebBrowser)
 {
-	m_pShellBrowser = pShellBrowser;
-	m_pWebBrowser = pWebBrowser;
+        m_pShellBrowser = pShellBrowser;
+        m_pWebBrowser = pWebBrowser;
 }
 
-/*
- * HandleNavigate: Handle a browser navigation event.
- */
-HRESULT CAddressBar::HandleNavigate()
+HRESULT CAddressBar::InitializeTabs()
 {
-	RefreshCurrentAddress();
-
-	return S_OK;
+        LoadSettings();
+        EnsureDefaultGroup();
+        UpdateActiveTabFromExplorer();
+        LayoutTabs();
+        InvalidateRect(nullptr, TRUE);
+        return S_OK;
 }
 
-/*
- * RefreshCurrentAddress: Get the respective display name or address of the
- *                        current explorer page and configure the address
- *                        bar respectively.
- * 
- * TODO: Split this up into smaller utility functions for code reuse purposes.
- */
-HRESULT CAddressBar::RefreshCurrentAddress()
+void CAddressBar::OnExplorerNavigate()
 {
-	HRESULT hr = NULL;
-	PIDLIST_ABSOLUTE pidlCurrentFolder;
-	CComPtr<IKnownFolderManager> pKnownFolderManager;
-	CComPtr<IKnownFolder> pKnownFolder;
-
-	hr = GetCurrentFolderPidl(&pidlCurrentFolder);
-
-	if (hr != S_OK)
-		return hr;
-
-	// Get the display text (current path or folder display name)
-	ZeroMemory(m_displayName, ARRAYSIZE(m_displayName));
-	ZeroMemory(m_currentPath, ARRAYSIZE(m_currentPath));
-
-	hr = pKnownFolderManager.CoCreateInstance(CLSID_KnownFolderManager);
-
-	if (hr != S_OK)
-		return hr;
-
-	HRESULT isKnownFolder = pKnownFolderManager->FindFolderFromIDList(
-		pidlCurrentFolder,
-		&pKnownFolder
-	);
-
-	m_locationHasPhysicalPath = SHGetPathFromIDListW(pidlCurrentFolder, m_currentPath);
-
-	// If the check if it's a known folder failed, then the path must be physical:
-	if (FAILED(isKnownFolder))
-	{
-		if (CEUtil::GetCESettings().showFullAddress)
-		{
-			BOOL hasPath = SUCCEEDED(
-				ShellHelpers::GetLocalizedDisplayPath(
-					m_currentPath,
-					m_displayName,
-					ARRAYSIZE(m_displayName)
-				)
-			);
-
-			// In the case this fails, just put the display name of the folder in its place.
-			if (!m_locationHasPhysicalPath)
-			{
-				hr = GetCurrentFolderName(m_displayName, ARRAYSIZE(m_displayName));
-
-				if (hr != S_OK)
-					return hr;
-			}
-		}
-		else
-		{
-			hr = GetCurrentFolderName(m_displayName, ARRAYSIZE(m_displayName));
-
-			if (hr != S_OK)
-				return hr;
-		}
-	}
-	else
-	{
-		// Known folders can also return a display name that is just a path. In order for
-		// localized display paths to work, this needs to be accounted for.
-		WCHAR buf[1024];
-		hr = GetCurrentFolderName(buf, ARRAYSIZE(buf));
-
-		if (hr != S_OK)
-			return hr;
-
-		BOOL shouldCopy = TRUE;
-
-		if (ShellHelpers::IsStringPath(buf) && m_locationHasPhysicalPath)
-		{
-			// If this fails, then it will just copy the original.
-			shouldCopy = !SUCCEEDED(
-				ShellHelpers::GetLocalizedDisplayPath(
-					m_currentPath,
-					m_displayName,
-					ARRAYSIZE(m_displayName)
-				)
-			);
-		}
-
-		if (shouldCopy)
-		{
-			wcscpy_s(m_displayName, buf);
-		}
-	}
-
-	// Get the folder icon
-	CComPtr<IShellFolder> pShellFolder;
-	PCITEMID_CHILD pidlChild;
-
-	hr = SHBindToParent(
-		pidlCurrentFolder,
-		IID_IShellFolder,
-		(void **)&pShellFolder,
-		&pidlChild
-	);
-
-	// Create the combobox item
-	COMBOBOXEXITEMW item = { CBEIF_IMAGE | CBEIF_SELECTEDIMAGE | CBEIF_TEXT };
-	item.iItem = -1; // -1 = selected item
-	item.iImage = SHMapPIDLToSystemImageListIndex(
-		pShellFolder,
-		pidlChild,
-		&item.iSelectedImage
-	);
-	item.pszText = m_displayName;
-
-	::SendMessageW(
-		m_toolbar,
-		CBEM_SETITEMW,
-		0,
-		(LPARAM)&item
-	);
-
-	pShellFolder.Release();
-	pKnownFolder.Release();
-	pKnownFolderManager.Release();
-
-	return S_OK;
+        UpdateActiveTabFromExplorer();
 }
 
-/*
- * GetCurrentAddressText: Get the current text in the address bar.
- */
-BOOL CAddressBar::GetCurrentAddressText(CComHeapPtr<WCHAR> &pszText)
+SIZE CAddressBar::GetDesiredSize() const
 {
-	pszText.Free();
-
-	INT cchMax = ::GetWindowTextLengthW(m_comboBoxEditCtl) + sizeof(UNICODE_NULL);
-	if (!pszText.Allocate(cchMax))
-		return FALSE;
-
-	return ::GetWindowTextW(m_comboBoxEditCtl, pszText, cchMax);
+        SIZE size = { 600, 0 };
+        int desiredHeight = m_totalHeight;
+        if (desiredHeight <= 0)
+        {
+                desiredHeight = m_fixedTabSize.cy + (m_tabMargin * 2);
+        }
+        desiredHeight = std::max(desiredHeight, m_fixedTabSize.cy + (m_tabMargin * 2));
+        size.cy = desiredHeight;
+        return size;
 }
 
-HRESULT STDMETHODCALLTYPE CAddressBar::ShowFileNotFoundError(HRESULT hRet)
+void CAddressBar::HandleExternalDragEnter(DWORD keyState, POINTL pt, IDataObject *dataObject)
 {
-	CComHeapPtr<WCHAR> input;
-	if (!GetCurrentAddressText(input))
-		return E_FAIL;
-
-
-	WCHAR szFormat[512];
-	WCHAR szMessage[1024];
-	WCHAR szTitle[512];
-	HINSTANCE hInst = _AtlBaseModule.GetModuleInstance();
-	if (m_theme == CLASSIC_EXPLORER_2K)
-	{
-		LoadStringW(hInst, IDS_NOTFOUND_TEXT_2K, szFormat, 512);
-		LoadStringW(hInst, IDS_NOTFOUND_TITLE_2K, szTitle, 512);
-	}
-	else
-	{
-		LoadStringW(hInst, IDS_NOTFOUND_TEXT_XP, szFormat, 512);
-		LoadStringW(hInst, IDS_NOTFOUND_TITLE_XP, szTitle, 512);
-
-		// The XP error is from IE, and shows a file:// URI.
-		// Swap out \ for /.
-		int len = wcslen(input);
-		for (int i = 0; i < len; i++)
-		{
-			if (input[i] == L'\\')
-				input[i] = L'/';
-		}
-	}
-
-	swprintf_s(szMessage, szFormat, input);
-	::MessageBoxW(m_comboBoxEditCtl, szMessage, szTitle, MB_OK | MB_ICONERROR);
-
-	return hRet;
+        UNREFERENCED_PARAMETER(keyState);
+        UNREFERENCED_PARAMETER(dataObject);
+        POINT client = { static_cast<LONG>(pt.x), static_cast<LONG>(pt.y) };
+        ScreenToClient(&client);
+        UpdateDropHover(client);
 }
 
-/*
- * Execute: Perform the browse action with the requested address.
- */
-HRESULT CAddressBar::Execute()
+void CAddressBar::HandleExternalDragOver(DWORD keyState, POINTL pt)
 {
-	HRESULT hr = E_FAIL;
-	PIDLIST_RELATIVE parsedPidl;
-	
-	// have to be initialised before goto cleanup...
-	CComPtr<IShellFolder> pShellFolder;
-	CComPtr<IShellFolder> pShellFolder2;
-
-	hr = ParseAddress(&parsedPidl);
-
-	if (hr == HRESULT_FROM_WIN32(ERROR_INVALID_DRIVE) || hr == HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND))
-	{
-		ILFree(parsedPidl);
-
-		if (SUCCEEDED(ExecuteCommandLine()))
-			return S_OK;
-
-		return ShowFileNotFoundError(hr);
-	}
-
-	if (!parsedPidl)
-	{
-		return E_FAIL;
-	}
-
-	PIDLIST_ABSOLUTE pidlCurrentFolder;
-	hr = GetCurrentFolderPidl(&pidlCurrentFolder);
-	if (FAILED(hr))
-		goto cleanup;
-
-	
-	hr = SHGetDesktopFolder(&pShellFolder);
-	if (FAILED(hr))
-		goto cleanup;
-
-	hr = pShellFolder->CompareIDs(0, pidlCurrentFolder, parsedPidl);
-
-	SHFree(pidlCurrentFolder);
-	if (hr == 0)
-		goto cleanup;
-
-	hr = m_pShellBrowser->BrowseObject(parsedPidl, 0);
-	if (SUCCEEDED(hr))
-		goto cleanup;
-
-	HWND topLevelWindow;
-	hr = IUnknown_GetWindow(m_pShellBrowser, &topLevelWindow);
-	if (FAILED(hr))
-		goto cleanup;
-
-	PCUITEMID_CHILD pidlChild;
-	hr = SHBindToParent(
-		(PCIDLIST_ABSOLUTE)parsedPidl,
-		IID_IShellFolder,
-		(void **)&pShellFolder2,
-		&pidlChild
-	);
-	if (FAILED(hr))
-		goto cleanup;
-
-	// TODO: steal SHInvokeDefaultCommand stuff from WinAPI and ReactOS...
-
-	cleanup:
-		ILFree(parsedPidl);
-
-	return hr;
+        UNREFERENCED_PARAMETER(keyState);
+        POINT client = { static_cast<LONG>(pt.x), static_cast<LONG>(pt.y) };
+        ScreenToClient(&client);
+        UpdateDropHover(client);
 }
 
-/*
- * ParseAddress: Parse the browser address into m_lastParsedPidl.
- */
-HRESULT CAddressBar::ParseAddress(PIDLIST_RELATIVE *pidlOut)
+void CAddressBar::HandleExternalDragLeave()
 {
-	HRESULT hr = E_FAIL;
-
-	ULONG eaten = NULL, attributes = NULL;
-	HWND topLevelWindow = NULL;
-	PIDLIST_RELATIVE relativePidl = NULL;
-
-	// Must be initialised before any gotos...
-	CComPtr<IShellFolder> pCurrentFolder = NULL;
-	PIDLIST_ABSOLUTE currentPidl = NULL;
-
-	// TODO: what is IBrowserService, how to replicate with newer code?
-	// I think it is only used for the current PIDL.
-
-	hr = IUnknown_GetWindow(m_pShellBrowser, &topLevelWindow);
-	if (FAILED(hr))
-		return hr;
-
-	CComHeapPtr<WCHAR> input, address;
-	if (!GetCurrentAddressText(input))
-		return E_FAIL;
-
-	int addressLength = (wcschr(input, L'%')) ? ::ExpandEnvironmentStringsW(input, NULL, 0) : 0;
-	if (
-		addressLength <= 0 ||
-		!address.Allocate(addressLength + 1) ||
-		!::ExpandEnvironmentStringsW(input, address, addressLength)
-	)
-	{
-		address.Free();
-		address.Attach(input.Detach());
-	}
-
-	CComPtr<IShellFolder> psfDesktop;
-	hr = SHGetDesktopFolder(&psfDesktop);
-	if (FAILED(hr))
-		goto cleanup;
-
-	// hr = pBrowserService->GetPidl(&currentPidl); // REPLICATE WITHOUT IBrowserService.
-	hr = GetCurrentFolderPidl(&currentPidl);
-	if (FAILED(hr))
-		goto parse_absolute;
-
-	hr = psfDesktop->BindToObject(
-		currentPidl,
-		NULL,
-		IID_IShellFolder,
-		(void **)&pCurrentFolder
-	);
-	if (FAILED(hr))
-		goto parse_absolute;
-
-	hr = pCurrentFolder->ParseDisplayName(
-		topLevelWindow,
-		NULL,
-		address,
-		&eaten,
-		&relativePidl,
-		&attributes
-	);
-	if (SUCCEEDED(hr))
-	{
-		*pidlOut = ILCombine(currentPidl, relativePidl);
-		ILFree(relativePidl);
-		goto cleanup;
-	}
-
-	parse_absolute:
-		// Used in case a relative path could not be parsed:
-		hr = psfDesktop->ParseDisplayName(
-			topLevelWindow,
-			NULL,
-			address,
-			&eaten,
-			pidlOut,
-			&attributes
-		);
-
-	cleanup:
-		if (currentPidl)
-			ILFree(currentPidl);
-
-	return hr;
+        m_dropHoverGroup = -1;
+        m_dropHoverTab = -1;
+        InvalidateRect(nullptr, FALSE);
 }
 
-/*
- * ExecuteCommandLine: Run the text in the address bar as if it is a shell
- *                     command.
- */
-HRESULT CAddressBar::ExecuteCommandLine()
+void CAddressBar::HandleExternalDrop(IDataObject *dataObject, DWORD keyState, POINTL pt)
 {
-	HRESULT hr = E_FAIL;
+        POINT client = { static_cast<LONG>(pt.x), static_cast<LONG>(pt.y) };
+        ScreenToClient(&client);
 
-	CComHeapPtr<WCHAR> pszCmdLine;
-	if (!GetCurrentAddressText(pszCmdLine))
-		return E_FAIL;
+        std::vector<std::wstring> paths = ExtractFilePathsFromDataObject(dataObject);
+        if (paths.empty())
+        {
+                HandleExternalDragLeave();
+                return;
+        }
 
-	PWCHAR args = PathGetArgsW(pszCmdLine);
-	PathRemoveArgsW(pszCmdLine);
-	PathUnquoteSpacesW(pszCmdLine);
+        HitTestResult result = HitTest(client);
+        if (!result.valid)
+        {
+                result.groupIndex = m_activeGroup;
+                result.tabIndex = m_activeTab;
+        }
 
-	SHELLEXECUTEINFOW info = {
-		sizeof(info),
-		SEE_MASK_FLAG_NO_UI,
-		m_hWnd
-	};
-	info.lpFile = pszCmdLine;
-	info.lpParameters = args;
-	info.nShow = SW_SHOWNORMAL;
+        if (result.groupIndex < 0 || result.groupIndex >= static_cast<int>(m_groups.size()))
+        {
+                HandleExternalDragLeave();
+                return;
+        }
 
-	WCHAR dir[MAX_PATH] = L"";
-	PIDLIST_ABSOLUTE pidl;
-	if (SUCCEEDED(GetCurrentFolderPidl(&pidl)))
-	{
-		if (SHGetPathFromIDListW(pidl, dir) && PathIsDirectoryW(dir))
-		{
-			info.lpDirectory = dir;
-		}
-	}
+        if (result.tabIndex < 0 && !m_groups[result.groupIndex].tabs.empty())
+        {
+                result.tabIndex = std::min(m_activeTab, static_cast<int>(m_groups[result.groupIndex].tabs.size() - 1));
+        }
 
-	if (!::ShellExecuteExW(&info))
-		return E_FAIL;
+        if (result.tabIndex < 0 || result.tabIndex >= static_cast<int>(m_groups[result.groupIndex].tabs.size()))
+        {
+                HandleExternalDragLeave();
+                return;
+        }
 
-	// We want to put the original text of the address bar back once the command
-	// is done executing.
-	RefreshCurrentAddress();
+        const Tab &targetTab = m_groups[result.groupIndex].tabs[result.tabIndex];
+        std::wstring targetPath = GetTabFilesystemPath(targetTab);
+        if (!targetPath.empty())
+        {
+                bool move = (keyState & MK_SHIFT) != 0 || (GetKeyState(VK_SHIFT) < 0);
+                PerformFileOperation(paths, targetPath, move);
+        }
 
-	return S_OK;
+        HandleExternalDragLeave();
 }
 
-/*
- * GetCurrentFolderPidl: Get the current folder or shell view as a pointer to
- *                       an absolute item ID list.
- * 
- * That is, a unique identifier of the current location used internally by the
- * Shell API.
- * 
- * See: https://learn.microsoft.com/en-us/previous-versions/windows/desktop/legacy/cc144089(v=vs.85)
- */
-HRESULT CAddressBar::GetCurrentFolderPidl(PIDLIST_ABSOLUTE *pidlOut)
+bool CAddressBar::CanAcceptDataObject(IDataObject *dataObject) const
 {
-	return CEUtil::GetCurrentFolderPidl(m_pShellBrowser, pidlOut);
+        if (!dataObject)
+                return false;
+
+        FORMATETC format = { CF_HDROP, nullptr, DVASPECT_CONTENT, -1, TYMED_HGLOBAL };
+        if (SUCCEEDED(dataObject->QueryGetData(&format)))
+                return true;
+
+        FORMATETC shellFormat = { RegisterClipboardFormat(CFSTR_SHELLIDLIST), nullptr, DVASPECT_CONTENT, -1, TYMED_HGLOBAL };
+        return SUCCEEDED(dataObject->QueryGetData(&shellFormat));
 }
 
-/*
- * GetCurrentFolderName: Get the display name of the current folder.
- * 
- * This is used as a fallback in case the path of the folder cannot be obtained,
- * or in the case of Known Folders which should always show their display name
- * (for example, the user's Documents folder).
- */
-HRESULT CAddressBar::GetCurrentFolderName(WCHAR *pszName, long length)
+// ============================================================================
+// Message handlers
+// ============================================================================
+
+LRESULT CAddressBar::OnCreate(UINT, WPARAM, LPARAM, BOOL &)
 {
-	HRESULT hr = NULL;
+        LoadSettings();
+        EnsureDefaultGroup();
 
-	CComPtr<IShellFolder> pShellFolder;
-	PCITEMID_CHILD pidlChild;
+        m_dropTarget.Attach(new ExplorerTabDropTarget(this));
+        RegisterDragDrop(m_hWnd, m_dropTarget);
 
-	PIDLIST_ABSOLUTE pidlCurFolder;
-	hr = GetCurrentFolderPidl(&pidlCurFolder);
-
-	if (hr != S_OK)
-		return hr;
-
-	hr = SHBindToParent(
-		pidlCurFolder,
-		IID_IShellFolder,
-		(void **)&pShellFolder,
-		&pidlChild
-	);
-
-	if (hr != S_OK)
-		return hr;
-
-	STRRET ret;
-	hr = pShellFolder->GetDisplayNameOf(
-		pidlChild,
-		CEUtil::GetCESettings().showFullAddress ? SHGDN_FORADDRESSBAR | SHGDN_FORPARSING : 0,
-		&ret
-	);
-
-	if (hr != S_OK)
-		return hr;
-
-	hr = StrRetToBuf(&ret, pidlChild, pszName, length);
-
-	if (hr != S_OK)
-		return hr;
-
-	return S_OK;
+        UpdateActiveTabFromExplorer();
+        LayoutTabs();
+        return 0;
 }
+
+LRESULT CAddressBar::OnDestroy(UINT, WPARAM, LPARAM, BOOL &)
+{
+        RevokeDragDrop(m_hWnd);
+        m_dropTarget.Release();
+        CancelDrag();
+        m_groups.clear();
+        return 0;
+}
+
+LRESULT CAddressBar::OnPaint(UINT, WPARAM, LPARAM, BOOL &)
+{
+        LayoutTabsIfNeeded();
+
+        PAINTSTRUCT ps;
+        HDC hdc = BeginPaint(&ps);
+        RECT clientRect;
+        GetClientRect(&clientRect);
+
+        DrawBackground(hdc, clientRect);
+
+        for (const TabGroup &group : m_groups)
+        {
+                if (!group.tabs.empty())
+                {
+                        DrawGroup(hdc, group);
+                }
+        }
+
+        if (m_dropHoverGroup >= 0)
+        {
+                DrawDropHover(hdc);
+        }
+
+        if (m_showGhost)
+        {
+                DrawGhost(hdc);
+        }
+
+        EndPaint(&ps);
+        return 0;
+}
+
+LRESULT CAddressBar::OnEraseBackground(UINT, WPARAM, LPARAM, BOOL &)
+{
+        return 1;
+}
+
+LRESULT CAddressBar::OnSize(UINT, WPARAM, LPARAM, BOOL &)
+{
+        m_layoutDirty = true;
+        LayoutTabs();
+        InvalidateRect(nullptr, TRUE);
+        return 0;
+}
+
+LRESULT CAddressBar::OnLButtonDown(UINT, WPARAM, LPARAM lParam, BOOL &)
+{
+        POINT pt = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+        HitTestResult result = HitTest(pt);
+
+        if (result.groupHandle)
+        {
+                StartGroupDrag(result.groupIndex, pt);
+        }
+        else if (result.valid)
+        {
+                StartTabDrag(result.groupIndex, result.tabIndex, pt);
+        }
+
+        return 0;
+}
+
+LRESULT CAddressBar::OnLButtonUp(UINT, WPARAM, LPARAM lParam, BOOL &)
+{
+        POINT pt = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+        CommitDrag(pt);
+        return 0;
+}
+
+LRESULT CAddressBar::OnMouseMove(UINT, WPARAM, LPARAM lParam, BOOL &)
+{
+        POINT pt = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+        UpdateDrag(pt);
+        return 0;
+}
+
+LRESULT CAddressBar::OnContextMenu(UINT, WPARAM, LPARAM lParam, BOOL &)
+{
+        POINT screenPt = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+        POINT clientPt = screenPt;
+        ScreenToClient(&clientPt);
+
+        HitTestResult result = HitTest(clientPt);
+        if (result.groupHandle && result.groupIndex >= 0)
+        {
+                ShowGroupColorMenu(result.groupIndex, screenPt);
+        }
+        else if (result.valid)
+        {
+                ShowContextMenuForTab(result.groupIndex, result.tabIndex, screenPt);
+        }
+        return 0;
+}
+
+LRESULT CAddressBar::OnCaptureChanged(UINT, WPARAM, LPARAM, BOOL &)
+{
+        CancelDrag();
+        return 0;
+}
+
+// ============================================================================
+// Layout helpers
+// ============================================================================
+
+void CAddressBar::LoadSettings()
+{
+        CEUtil::CESettings settings = CEUtil::GetCESettings();
+        m_autoSizeTabs = settings.tabAutoSize != 0;
+        if (settings.tabFixedWidth > 0)
+                m_fixedTabSize.cx = static_cast<int>(settings.tabFixedWidth);
+        if (settings.tabFixedHeight > 0)
+                m_fixedTabSize.cy = static_cast<int>(settings.tabFixedHeight);
+}
+
+void CAddressBar::EnsureDefaultGroup()
+{
+        if (!m_groups.empty())
+                return;
+
+        TabGroup group;
+        group.name = L"Group 1";
+        group.color = kDefaultGroupPalette.front();
+        m_groups.push_back(group);
+        m_activeGroup = 0;
+        m_activeTab = 0;
+}
+
+void CAddressBar::LayoutTabsIfNeeded()
+{
+        if (m_layoutDirty)
+        {
+                LayoutTabs();
+        }
+}
+
+void CAddressBar::LayoutTabs()
+{
+        RECT clientRect;
+        GetClientRect(&clientRect);
+        int rowHeight = m_fixedTabSize.cy;
+
+        int x = clientRect.left + m_tabMargin;
+        int y = clientRect.top + m_tabMargin;
+        int currentRow = 0;
+
+        HDC hdc = GetDC();
+        for (auto &group : m_groups)
+        {
+                if (group.tabs.empty())
+                        continue;
+
+                std::vector<int> tabWidths;
+                tabWidths.reserve(group.tabs.size());
+                for (const Tab &tab : group.tabs)
+                {
+                        int width = m_autoSizeTabs ? CalculateTabWidth(hdc, tab.title) : m_fixedTabSize.cx;
+                        width = std::min(std::max(width, m_minTabWidth), m_maxTabWidth);
+                        tabWidths.push_back(width);
+                }
+
+                int groupWidth = m_groupHandleWidth;
+                if (!tabWidths.empty())
+                {
+                        groupWidth += std::accumulate(tabWidths.begin(), tabWidths.end(), 0);
+                        groupWidth += static_cast<int>((tabWidths.size() - 1)) * m_tabSpacing;
+                }
+
+                if (x + groupWidth > clientRect.right - m_tabMargin && currentRow < (m_maxRows - 1))
+                {
+                        currentRow++;
+                        x = clientRect.left + m_tabMargin;
+                        y += rowHeight + m_rowSpacing;
+                }
+
+                group.bounds.left = x;
+                group.bounds.top = y;
+                group.bounds.right = x + groupWidth;
+                group.bounds.bottom = y + rowHeight;
+
+                int tabX = x + m_groupHandleWidth;
+                for (size_t idx = 0; idx < group.tabs.size(); ++idx)
+                {
+                        RECT tabRect = { tabX, y, tabX + tabWidths[idx], y + rowHeight };
+                        group.tabs[idx].bounds = tabRect;
+                        tabX += tabWidths[idx] + m_tabSpacing;
+                }
+
+                x = group.bounds.right + m_groupSpacing;
+        }
+        ReleaseDC(hdc);
+
+        m_totalHeight = (currentRow + 1) * rowHeight + (m_tabMargin * 2) + (currentRow * m_rowSpacing);
+        m_layoutDirty = false;
+        RefreshActiveState();
+}
+
+int CAddressBar::CalculateTabWidth(HDC hdc, const std::wstring &text) const
+{
+        RECT rc = { 0,0,0,0 };
+        DrawTextW(hdc, text.c_str(), static_cast<int>(text.length()), &rc, DT_CALCRECT | DT_SINGLELINE);
+        int width = rc.right - rc.left + (m_tabPaddingX * 2);
+        return width;
+}
+
+void CAddressBar::RefreshActiveState()
+{
+        for (size_t groupIndex = 0; groupIndex < m_groups.size(); ++groupIndex)
+        {
+                auto &group = m_groups[groupIndex];
+                for (size_t tabIndex = 0; tabIndex < group.tabs.size(); ++tabIndex)
+                {
+                        group.tabs[tabIndex].active = (static_cast<int>(groupIndex) == m_activeGroup && static_cast<int>(tabIndex) == m_activeTab);
+                }
+        }
+}
+
+// ============================================================================
+// Painting helpers
+// ============================================================================
+
+void CAddressBar::DrawBackground(HDC hdc, const RECT &clientRect) const
+{
+        HBRUSH background = CreateSolidBrush(m_backgroundColor);
+        FillRect(hdc, &clientRect, background);
+        DeleteObject(background);
+}
+
+void CAddressBar::DrawGroup(HDC hdc, const TabGroup &group) const
+{
+        DrawGroupHandle(hdc, group);
+        for (const Tab &tab : group.tabs)
+        {
+                        DrawTab(hdc, tab, group.color);
+        }
+}
+
+void CAddressBar::DrawTab(HDC hdc, const Tab &tab, COLORREF groupColor) const
+{
+        COLORREF baseColor = tab.active ? AdjustColor(groupColor, 1.2) : groupColor;
+        HBRUSH brush = CreateSolidBrush(baseColor);
+        FillRect(hdc, &tab.bounds, brush);
+        DeleteObject(brush);
+
+        HPEN pen = CreatePen(PS_SOLID, 1, m_borderColor);
+        HPEN oldPen = (HPEN)SelectObject(hdc, pen);
+        HBRUSH oldBrush = (HBRUSH)SelectObject(hdc, GetStockObject(NULL_BRUSH));
+        Rectangle(hdc, tab.bounds.left, tab.bounds.top, tab.bounds.right, tab.bounds.bottom);
+        SelectObject(hdc, oldBrush);
+        SelectObject(hdc, oldPen);
+        DeleteObject(pen);
+
+        RECT textRect = tab.bounds;
+        InflateRect(&textRect, -m_tabPaddingX, -m_tabPaddingY);
+        SetBkMode(hdc, TRANSPARENT);
+        SetTextColor(hdc, RGB(40, 40, 40));
+        DrawTextW(hdc, tab.title.c_str(), static_cast<int>(tab.title.length()), &textRect, DT_SINGLELINE | DT_VCENTER | DT_LEFT | DT_END_ELLIPSIS);
+}
+
+void CAddressBar::DrawGroupHandle(HDC hdc, const TabGroup &group) const
+{
+        RECT handleRect = group.bounds;
+        handleRect.right = handleRect.left + m_groupHandleWidth;
+        HBRUSH brush = CreateSolidBrush(AdjustColor(group.color, 0.8));
+        FillRect(hdc, &handleRect, brush);
+        DeleteObject(brush);
+}
+
+void CAddressBar::DrawGhost(HDC hdc) const
+{
+        if (!m_showGhost)
+                return;
+
+        RECT rect = m_dragGhostRect;
+        int width = rect.right - rect.left;
+        int height = rect.bottom - rect.top;
+        if (width <= 0 || height <= 0)
+                return;
+
+        BITMAPINFO bmi = {};
+        bmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+        bmi.bmiHeader.biWidth = width;
+        bmi.bmiHeader.biHeight = -height;
+        bmi.bmiHeader.biPlanes = 1;
+        bmi.bmiHeader.biBitCount = 32;
+        bmi.bmiHeader.biCompression = BI_RGB;
+
+        void *bits = nullptr;
+        HBITMAP bitmap = CreateDIBSection(hdc, &bmi, DIB_RGB_COLORS, &bits, nullptr, 0);
+        if (!bitmap)
+                return;
+
+        UINT32 *pixelData = static_cast<UINT32 *>(bits);
+        COLORREF ghostColor = RGB(120, 120, 120);
+        UINT32 argb = (120 << 24) | (GetBValue(ghostColor) << 16) | (GetGValue(ghostColor) << 8) | GetRValue(ghostColor);
+        std::fill(pixelData, pixelData + (width * height), argb);
+
+        HDC memDc = CreateCompatibleDC(hdc);
+        HGDIOBJ old = SelectObject(memDc, bitmap);
+        BLENDFUNCTION blend = { AC_SRC_OVER, 0, 150, 0 };
+        AlphaBlend(hdc, rect.left, rect.top, width, height, memDc, 0, 0, width, height, blend);
+        SelectObject(memDc, old);
+        DeleteDC(memDc);
+        DeleteObject(bitmap);
+}
+
+void CAddressBar::DrawDropHover(HDC hdc) const
+{
+        if (m_dropHoverGroup < 0 || m_dropHoverGroup >= static_cast<int>(m_groups.size()))
+                return;
+
+        RECT highlightRect = {0};
+        if (m_dropHoverTab >= 0 && m_dropHoverTab < static_cast<int>(m_groups[m_dropHoverGroup].tabs.size()))
+        {
+                highlightRect = m_groups[m_dropHoverGroup].tabs[m_dropHoverTab].bounds;
+        }
+        else
+        {
+                highlightRect = m_groups[m_dropHoverGroup].bounds;
+        }
+
+        HPEN pen = CreatePen(PS_DOT, 2, RGB(30, 120, 215));
+        HPEN oldPen = (HPEN)SelectObject(hdc, pen);
+        HBRUSH oldBrush = (HBRUSH)SelectObject(hdc, GetStockObject(NULL_BRUSH));
+        Rectangle(hdc, highlightRect.left, highlightRect.top, highlightRect.right, highlightRect.bottom);
+        SelectObject(hdc, oldBrush);
+        SelectObject(hdc, oldPen);
+        DeleteObject(pen);
+}
+
+COLORREF CAddressBar::AdjustColor(COLORREF color, double factor)
+{
+        int r = std::clamp(static_cast<int>(GetRValue(color) * factor), 0, 255);
+        int g = std::clamp(static_cast<int>(GetGValue(color) * factor), 0, 255);
+        int b = std::clamp(static_cast<int>(GetBValue(color) * factor), 0, 255);
+        return RGB(r, g, b);
+}
+
+// ============================================================================
+// Tab management
+// ============================================================================
+
+HRESULT CAddressBar::AddTabForLocation(PIDLIST_ABSOLUTE pidl, bool makeActive, bool navigate, COLORREF colorOverride)
+{
+        if (!pidl)
+                return E_INVALIDARG;
+
+        EnsureDefaultGroup();
+
+        Tab newTab;
+        newTab.pidl.reset(pidl);
+        newTab.active = false;
+
+        CComHeapPtr<wchar_t> name;
+        if (SUCCEEDED(SHGetNameFromIDList(pidl, SIGDN_NORMALDISPLAY, &name)))
+        {
+                newTab.title = name.m_pData;
+        }
+        else
+        {
+                newTab.title = L"Tab";
+        }
+
+        TabGroup &targetGroup = m_groups[m_activeGroup];
+        if (targetGroup.tabs.empty())
+        {
+                targetGroup.color = colorOverride;
+        }
+        targetGroup.tabs.push_back(std::move(newTab));
+        m_activeTab = static_cast<int>(targetGroup.tabs.size() - 1);
+
+        if (makeActive)
+        {
+                ActivateTab(m_activeGroup, m_activeTab, navigate);
+        }
+
+        m_layoutDirty = true;
+        LayoutTabs();
+        InvalidateRect(nullptr, TRUE);
+        return S_OK;
+}
+
+void CAddressBar::RemoveEmptyGroups()
+{
+        if (m_groups.empty())
+                return;
+
+        bool removed = false;
+        for (auto it = m_groups.begin(); it != m_groups.end();)
+        {
+                if (it->tabs.empty() && m_groups.size() > 1)
+                {
+                        int index = static_cast<int>(std::distance(m_groups.begin(), it));
+                        it = m_groups.erase(it);
+                        if (m_activeGroup >= index && m_activeGroup > 0)
+                                --m_activeGroup;
+                        removed = true;
+                }
+                else
+                {
+                        ++it;
+                }
+        }
+
+        if (m_groups.empty())
+        {
+                EnsureDefaultGroup();
+        }
+
+        if (removed)
+        {
+                m_activeGroup = std::clamp(m_activeGroup, 0, static_cast<int>(m_groups.size() - 1));
+                if (!m_groups[m_activeGroup].tabs.empty())
+                        m_activeTab = std::clamp(m_activeTab, 0, static_cast<int>(m_groups[m_activeGroup].tabs.size() - 1));
+        }
+}
+
+void CAddressBar::ActivateTab(int groupIndex, int tabIndex, bool navigate)
+{
+        if (groupIndex < 0 || groupIndex >= static_cast<int>(m_groups.size()))
+                return;
+        if (tabIndex < 0 || tabIndex >= static_cast<int>(m_groups[groupIndex].tabs.size()))
+                return;
+
+        m_activeGroup = groupIndex;
+        m_activeTab = tabIndex;
+        RefreshActiveState();
+
+        if (navigate && m_pShellBrowser)
+        {
+                Tab &tab = m_groups[groupIndex].tabs[tabIndex];
+                if (tab.pidl.pidl)
+                {
+                        m_pShellBrowser->BrowseObject(tab.pidl.pidl, SBSP_SAMEBROWSER | SBSP_ABSOLUTE);
+                }
+        }
+
+        m_layoutDirty = true;
+        LayoutTabs();
+        InvalidateRect(nullptr, FALSE);
+}
+
+void CAddressBar::ActivateTabByPidl(PIDLIST_ABSOLUTE pidl)
+{
+        if (!pidl)
+                return;
+
+        for (size_t groupIndex = 0; groupIndex < m_groups.size(); ++groupIndex)
+        {
+                auto &group = m_groups[groupIndex];
+                for (size_t tabIndex = 0; tabIndex < group.tabs.size(); ++tabIndex)
+                {
+                        if (group.tabs[tabIndex].pidl.pidl && ILIsEqual(group.tabs[tabIndex].pidl.pidl, pidl))
+                        {
+                                ActivateTab(static_cast<int>(groupIndex), static_cast<int>(tabIndex), false);
+                                return;
+                        }
+                }
+        }
+}
+
+void CAddressBar::UpdateActiveTabFromExplorer()
+{
+        if (!m_pShellBrowser)
+                return;
+
+        PIDLIST_ABSOLUTE pidl = nullptr;
+        if (FAILED(CEUtil::GetCurrentFolderPidl(m_pShellBrowser, &pidl)))
+                return;
+
+        ActivateTabByPidl(pidl);
+
+        bool alreadyPresent = false;
+        for (const auto &group : m_groups)
+        {
+                for (const auto &tab : group.tabs)
+                {
+                        if (tab.pidl.pidl && ILIsEqual(tab.pidl.pidl, pidl))
+                        {
+                                alreadyPresent = true;
+                                break;
+                        }
+                }
+                if (alreadyPresent)
+                        break;
+        }
+
+        if (!alreadyPresent)
+        {
+                AddTabForLocation(pidl, true, false, m_groups[m_activeGroup].color);
+        }
+
+        CoTaskMemFree(pidl);
+        m_layoutDirty = true;
+        LayoutTabs();
+        InvalidateRect(nullptr, FALSE);
+}
+
+void CAddressBar::CreateNewWindowForTab(const Tab &tab)
+{
+        std::wstring path = GetTabFilesystemPath(tab);
+        if (path.empty())
+                return;
+
+        ShellExecuteW(nullptr, L"open", L"explorer.exe", path.c_str(), nullptr, SW_SHOWNORMAL);
+}
+
+std::wstring CAddressBar::GetTabFilesystemPath(const Tab &tab) const
+{
+        if (!tab.pidl.pidl)
+                return L"";
+
+        CComHeapPtr<wchar_t> buffer;
+        if (SUCCEEDED(SHGetNameFromIDList(tab.pidl.pidl, SIGDN_FILESYSPATH, &buffer)))
+        {
+                        return std::wstring(buffer.m_pData);
+        }
+
+        if (SUCCEEDED(SHGetNameFromIDList(tab.pidl.pidl, SIGDN_DESKTOPABSOLUTEPARSING, &buffer)))
+        {
+                return std::wstring(buffer.m_pData);
+        }
+
+        return L"";
+}
+
+void CAddressBar::SetGroupColor(int groupIndex, COLORREF color)
+{
+        if (groupIndex < 0 || groupIndex >= static_cast<int>(m_groups.size()))
+                return;
+        m_groups[groupIndex].color = color;
+        InvalidateRect(nullptr, FALSE);
+}
+
+void CAddressBar::ShowGroupColorMenu(int groupIndex, POINT screenPoint)
+{
+        if (groupIndex < 0 || groupIndex >= static_cast<int>(m_groups.size()))
+                return;
+
+        HMENU menu = CreatePopupMenu();
+        for (size_t idx = 0; idx < kDefaultGroupPalette.size(); ++idx)
+        {
+                UINT flags = MF_STRING;
+                if (m_groups[groupIndex].color == kDefaultGroupPalette[idx])
+                        flags |= MF_CHECKED;
+                wchar_t label[32];
+                swprintf_s(label, L"Color %zu", idx + 1);
+                AppendMenuW(menu, flags, 7200 + static_cast<UINT>(idx), label);
+        }
+
+        AppendMenuW(menu, MF_STRING, 7300, L"Reset color");
+
+        UINT command = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_LEFTALIGN | TPM_TOPALIGN, screenPoint.x, screenPoint.y, 0, m_hWnd, nullptr);
+        DestroyMenu(menu);
+
+        if (command >= 7200 && command < 7200 + kDefaultGroupPalette.size())
+        {
+                size_t paletteIndex = command - 7200;
+                SetGroupColor(groupIndex, kDefaultGroupPalette[paletteIndex]);
+        }
+        else if (command == 7300)
+        {
+                SetGroupColor(groupIndex, kDefaultGroupPalette.front());
+        }
+}
+
+void CAddressBar::ShowContextMenuForTab(int groupIndex, int tabIndex, POINT screenPoint)
+{
+        if (groupIndex < 0 || groupIndex >= static_cast<int>(m_groups.size()))
+                return;
+        if (tabIndex < 0 || tabIndex >= static_cast<int>(m_groups[groupIndex].tabs.size()))
+                return;
+
+        HMENU menu = CreatePopupMenu();
+        AppendMenuW(menu, MF_STRING, 7400, L"Close tab");
+        AppendMenuW(menu, MF_STRING, 7401, L"Move to new group");
+        AppendMenuW(menu, MF_STRING, 7402, L"Open in new window");
+
+        UINT command = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_LEFTALIGN | TPM_TOPALIGN, screenPoint.x, screenPoint.y, 0, m_hWnd, nullptr);
+        DestroyMenu(menu);
+
+        switch (command)
+        {
+        case 7400:
+        {
+                auto &group = m_groups[groupIndex];
+                if (tabIndex >= 0 && tabIndex < static_cast<int>(group.tabs.size()))
+                {
+                        group.tabs.erase(group.tabs.begin() + tabIndex);
+                        if (m_activeGroup == groupIndex)
+                        {
+                                m_activeTab = std::clamp(m_activeTab, 0, static_cast<int>(group.tabs.size()) - 1);
+                        }
+                        RemoveEmptyGroups();
+                        m_layoutDirty = true;
+                        LayoutTabs();
+                        InvalidateRect(nullptr, TRUE);
+                }
+                break;
+        }
+        case 7401:
+        {
+                Tab tab = std::move(m_groups[groupIndex].tabs[tabIndex]);
+                m_groups[groupIndex].tabs.erase(m_groups[groupIndex].tabs.begin() + tabIndex);
+                RemoveEmptyGroups();
+
+                TabGroup newGroup;
+                wchar_t label[32];
+                swprintf_s(label, L"Group %zu", m_groups.size() + 1ULL);
+                newGroup.name = label;
+                size_t paletteIndex = (m_groups.size()) % kDefaultGroupPalette.size();
+                newGroup.color = kDefaultGroupPalette[paletteIndex];
+                newGroup.tabs.push_back(std::move(tab));
+                m_groups.insert(m_groups.begin() + std::min(static_cast<size_t>(groupIndex + 1), m_groups.size()), std::move(newGroup));
+                m_activeGroup = static_cast<int>(std::min(static_cast<size_t>(groupIndex + 1), m_groups.size() - 1));
+                m_activeTab = 0;
+                RefreshActiveState();
+                m_layoutDirty = true;
+                LayoutTabs();
+                InvalidateRect(nullptr, TRUE);
+                break;
+        }
+        case 7402:
+                CreateNewWindowForTab(m_groups[groupIndex].tabs[tabIndex]);
+                break;
+        default:
+                break;
+        }
+}
+
+void CAddressBar::EnsureGhostRect(const POINT &pt)
+{
+        if (m_draggingTab && m_draggedGroupIndex >= 0 && m_draggedTabIndex >= 0)
+        {
+                const RECT &original = m_groups[m_draggedGroupIndex].tabs[m_draggedTabIndex].bounds;
+                int dx = pt.x - m_dragStart.x;
+                int dy = pt.y - m_dragStart.y;
+                m_dragGhostRect = { original.left + dx, original.top + dy, original.right + dx, original.bottom + dy };
+        }
+        else if (m_draggingGroup && m_draggedGroupIndex >= 0)
+        {
+                const RECT &original = m_groups[m_draggedGroupIndex].bounds;
+                int dx = pt.x - m_dragStart.x;
+                int dy = pt.y - m_dragStart.y;
+                m_dragGhostRect = { original.left + dx, original.top + dy, original.right + dx, original.bottom + dy };
+        }
+}
+
+void CAddressBar::UpdatePendingDropTarget(const POINT &pt)
+{
+        m_pendingDropGroup = -1;
+        m_pendingDropTab = -1;
+
+        for (size_t groupIndex = 0; groupIndex < m_groups.size(); ++groupIndex)
+        {
+                const TabGroup &group = m_groups[groupIndex];
+                if (!PtInRect(&group.bounds, pt))
+                        continue;
+
+                if (m_draggingGroup)
+                {
+                        int midpoint = group.bounds.left + ((group.bounds.right - group.bounds.left) / 2);
+                        if (pt.x < midpoint)
+                                m_pendingDropGroup = static_cast<int>(groupIndex);
+                        else
+                                m_pendingDropGroup = static_cast<int>(groupIndex + 1);
+                        return;
+                }
+
+                for (size_t tabIndex = 0; tabIndex < group.tabs.size(); ++tabIndex)
+                {
+                        const RECT &bounds = group.tabs[tabIndex].bounds;
+                        if (pt.x <= bounds.left + ((bounds.right - bounds.left) / 2))
+                        {
+                                m_pendingDropGroup = static_cast<int>(groupIndex);
+                                m_pendingDropTab = static_cast<int>(tabIndex);
+                                return;
+                        }
+                }
+
+                m_pendingDropGroup = static_cast<int>(groupIndex);
+                m_pendingDropTab = static_cast<int>(group.tabs.size());
+                return;
+        }
+}
+
+void CAddressBar::UpdateDropHover(const POINT &pt)
+{
+        m_dropHoverGroup = -1;
+        m_dropHoverTab = -1;
+
+        for (size_t groupIndex = 0; groupIndex < m_groups.size(); ++groupIndex)
+        {
+                const TabGroup &group = m_groups[groupIndex];
+                if (!PtInRect(&group.bounds, pt))
+                        continue;
+
+                m_dropHoverGroup = static_cast<int>(groupIndex);
+                for (size_t tabIndex = 0; tabIndex < group.tabs.size(); ++tabIndex)
+                {
+                        if (PtInRect(&group.tabs[tabIndex].bounds, pt))
+                        {
+                                m_dropHoverTab = static_cast<int>(tabIndex);
+                                break;
+                        }
+                }
+                break;
+        }
+        InvalidateRect(nullptr, FALSE);
+}
+
+// ============================================================================
+// Drag helpers
+// ============================================================================
+
+CAddressBar::HitTestResult CAddressBar::HitTest(const POINT &pt) const
+{
+        HitTestResult result;
+        for (size_t groupIndex = 0; groupIndex < m_groups.size(); ++groupIndex)
+        {
+                const TabGroup &group = m_groups[groupIndex];
+                if (group.tabs.empty())
+                        continue;
+
+                RECT handleRect = group.bounds;
+                handleRect.right = handleRect.left + m_groupHandleWidth;
+                if (PtInRect(&handleRect, pt))
+                {
+                        result.valid = true;
+                        result.groupHandle = true;
+                        result.groupIndex = static_cast<int>(groupIndex);
+                        return result;
+                }
+
+                for (size_t tabIndex = 0; tabIndex < group.tabs.size(); ++tabIndex)
+                {
+                        if (PtInRect(&group.tabs[tabIndex].bounds, pt))
+                        {
+                                result.valid = true;
+                                result.groupIndex = static_cast<int>(groupIndex);
+                                result.tabIndex = static_cast<int>(tabIndex);
+                                return result;
+                        }
+                }
+        }
+        return result;
+}
+
+void CAddressBar::StartTabDrag(int groupIndex, int tabIndex, const POINT &pt)
+{
+        if (groupIndex < 0 || groupIndex >= static_cast<int>(m_groups.size()))
+                return;
+        if (tabIndex < 0 || tabIndex >= static_cast<int>(m_groups[groupIndex].tabs.size()))
+                return;
+
+        m_draggingTab = true;
+        m_draggingGroup = false;
+        m_dragClickCandidate = true;
+        m_detachPending = false;
+        m_draggedGroupIndex = groupIndex;
+        m_draggedTabIndex = tabIndex;
+        m_dragStart = pt;
+        m_dragPoint = pt;
+        m_showGhost = false;
+        SetCapture();
+}
+
+void CAddressBar::StartGroupDrag(int groupIndex, const POINT &pt)
+{
+        if (groupIndex < 0 || groupIndex >= static_cast<int>(m_groups.size()))
+                return;
+
+        m_draggingGroup = true;
+        m_draggingTab = false;
+        m_dragClickCandidate = true;
+        m_detachPending = false;
+        m_draggedGroupIndex = groupIndex;
+        m_draggedTabIndex = -1;
+        m_dragStart = pt;
+        m_dragPoint = pt;
+        m_showGhost = false;
+        SetCapture();
+}
+
+void CAddressBar::UpdateDrag(const POINT &pt)
+{
+        if (!m_draggingTab && !m_draggingGroup)
+                return;
+
+        m_dragPoint = pt;
+        int dx = std::abs(pt.x - m_dragStart.x);
+        int dy = std::abs(pt.y - m_dragStart.y);
+        if (m_dragClickCandidate && (dx > GetSystemDragThresholdX() / 2 || dy > GetSystemDragThresholdY() / 2))
+        {
+                m_dragClickCandidate = false;
+                m_showGhost = true;
+        }
+
+        if (m_showGhost)
+        {
+                EnsureGhostRect(pt);
+                UpdatePendingDropTarget(pt);
+                InvalidateRect(nullptr, FALSE);
+        }
+
+        RECT clientRect;
+        GetClientRect(&clientRect);
+        int detachThreshold = 40;
+        if (pt.y < clientRect.top - detachThreshold || pt.y > clientRect.bottom + detachThreshold)
+        {
+                m_detachPending = true;
+        }
+        else
+        {
+                m_detachPending = false;
+        }
+}
+
+void CAddressBar::CommitDrag(const POINT &pt)
+{
+        if (!m_draggingTab && !m_draggingGroup)
+                return;
+
+        ReleaseCapture();
+
+        if (m_dragClickCandidate)
+        {
+                if (m_draggingTab && m_draggedGroupIndex >= 0 && m_draggedTabIndex >= 0)
+                {
+                        ActivateTab(m_draggedGroupIndex, m_draggedTabIndex, true);
+                }
+                CancelDrag();
+                return;
+        }
+
+        if (m_draggingTab && m_detachPending)
+        {
+                DetachDraggedTab();
+                CancelDrag();
+                return;
+        }
+
+        if (m_draggingTab && m_pendingDropGroup >= 0)
+        {
+                int targetIndex = (m_pendingDropTab >= 0) ? m_pendingDropTab : m_groups[m_pendingDropGroup].tabs.size();
+                ReorderTab(m_pendingDropGroup, targetIndex);
+        }
+        else if (m_draggingGroup && m_pendingDropGroup >= 0)
+        {
+                ReorderGroup(m_pendingDropGroup);
+        }
+
+        CancelDrag();
+        m_layoutDirty = true;
+        LayoutTabs();
+        InvalidateRect(nullptr, TRUE);
+}
+
+void CAddressBar::CancelDrag()
+{
+        m_draggingTab = false;
+        m_draggingGroup = false;
+        m_dragClickCandidate = false;
+        m_detachPending = false;
+        m_showGhost = false;
+        m_pendingDropGroup = -1;
+        m_pendingDropTab = -1;
+        m_draggedGroupIndex = -1;
+        m_draggedTabIndex = -1;
+}
+
+void CAddressBar::DetachDraggedTab()
+{
+        if (!m_draggingTab || m_draggedGroupIndex < 0 || m_draggedGroupIndex >= static_cast<int>(m_groups.size()))
+                return;
+        if (m_draggedTabIndex < 0 || m_draggedTabIndex >= static_cast<int>(m_groups[m_draggedGroupIndex].tabs.size()))
+                return;
+
+        Tab tab = std::move(m_groups[m_draggedGroupIndex].tabs[m_draggedTabIndex]);
+        m_groups[m_draggedGroupIndex].tabs.erase(m_groups[m_draggedGroupIndex].tabs.begin() + m_draggedTabIndex);
+        RemoveEmptyGroups();
+        CreateNewWindowForTab(tab);
+}
+
+void CAddressBar::ReorderTab(int targetGroup, int targetIndex)
+{
+        if (m_draggedGroupIndex < 0 || m_draggedGroupIndex >= static_cast<int>(m_groups.size()))
+                return;
+        if (m_draggedTabIndex < 0 || m_draggedTabIndex >= static_cast<int>(m_groups[m_draggedGroupIndex].tabs.size()))
+                return;
+
+        Tab movingTab = std::move(m_groups[m_draggedGroupIndex].tabs[m_draggedTabIndex]);
+        m_groups[m_draggedGroupIndex].tabs.erase(m_groups[m_draggedGroupIndex].tabs.begin() + m_draggedTabIndex);
+
+        if (targetGroup == m_draggedGroupIndex && targetIndex > m_draggedTabIndex)
+                --targetIndex;
+
+        if (m_groups[m_draggedGroupIndex].tabs.empty() && m_groups.size() > 1)
+        {
+                if (targetGroup > m_draggedGroupIndex)
+                        --targetGroup;
+                m_groups.erase(m_groups.begin() + m_draggedGroupIndex);
+                if (m_activeGroup > m_draggedGroupIndex && m_activeGroup > 0)
+                        --m_activeGroup;
+        }
+
+        targetGroup = std::clamp(targetGroup, 0, static_cast<int>(m_groups.size() - 1));
+        targetIndex = std::clamp(targetIndex, 0, static_cast<int>(m_groups[targetGroup].tabs.size()));
+
+        m_groups[targetGroup].tabs.insert(m_groups[targetGroup].tabs.begin() + targetIndex, std::move(movingTab));
+        m_activeGroup = targetGroup;
+        m_activeTab = targetIndex;
+        RefreshActiveState();
+}
+
+void CAddressBar::ReorderGroup(int targetIndex)
+{
+        if (m_draggedGroupIndex < 0 || m_draggedGroupIndex >= static_cast<int>(m_groups.size()))
+                return;
+
+        TabGroup movingGroup = std::move(m_groups[m_draggedGroupIndex]);
+        m_groups.erase(m_groups.begin() + m_draggedGroupIndex);
+
+        if (targetIndex > m_draggedGroupIndex)
+                --targetIndex;
+        targetIndex = std::clamp(targetIndex, 0, static_cast<int>(m_groups.size()));
+
+        m_groups.insert(m_groups.begin() + targetIndex, std::move(movingGroup));
+        m_activeGroup = targetIndex;
+        m_activeTab = std::clamp(m_activeTab, 0, static_cast<int>(m_groups[m_activeGroup].tabs.size()) - 1);
+        RefreshActiveState();
+}
+
+// ============================================================================
+// Drop helpers
+// ============================================================================
+
+std::vector<std::wstring> CAddressBar::ExtractFilePathsFromDataObject(IDataObject *dataObject) const
+{
+        std::vector<std::wstring> paths;
+        if (!dataObject)
+                return paths;
+
+        FORMATETC fmt = { CF_HDROP, nullptr, DVASPECT_CONTENT, -1, TYMED_HGLOBAL };
+        STGMEDIUM medium = {};
+        if (SUCCEEDED(dataObject->GetData(&fmt, &medium)))
+        {
+                HDROP drop = static_cast<HDROP>(GlobalLock(medium.hGlobal));
+                if (drop)
+                {
+                        UINT count = DragQueryFileW(drop, 0xFFFFFFFF, nullptr, 0);
+                        for (UINT i = 0; i < count; ++i)
+                        {
+                        UINT length = DragQueryFileW(drop, i, nullptr, 0);
+                        std::wstring buffer(length + 1, L'\0');
+                        DragQueryFileW(drop, i, buffer.data(), length + 1);
+                        paths.push_back(buffer.c_str());
+                        }
+                        GlobalUnlock(medium.hGlobal);
+                }
+                ReleaseStgMedium(&medium);
+                if (!paths.empty())
+                        return paths;
+        }
+
+        FORMATETC fmtShell = { RegisterClipboardFormat(CFSTR_SHELLIDLIST), nullptr, DVASPECT_CONTENT, -1, TYMED_HGLOBAL };
+        if (SUCCEEDED(dataObject->GetData(&fmtShell, &medium)))
+        {
+                CIDA *cIda = static_cast<CIDA *>(GlobalLock(medium.hGlobal));
+                if (cIda)
+                {
+                        for (UINT i = 0; i < cIda->cidl; ++i)
+                        {
+                                LPCITEMIDLIST folder = reinterpret_cast<LPCITEMIDLIST>(reinterpret_cast<const BYTE *>(cIda) + cIda->aoffset[0]);
+                                LPCITEMIDLIST relative = reinterpret_cast<LPCITEMIDLIST>(reinterpret_cast<const BYTE *>(cIda) + cIda->aoffset[i + 1]);
+                                PIDLIST_ABSOLUTE absolute = ILCombine(folder, relative);
+                                if (absolute)
+                                {
+                                        CComHeapPtr<wchar_t> buffer;
+                                        if (SUCCEEDED(SHGetNameFromIDList(absolute, SIGDN_FILESYSPATH, &buffer)))
+                                        {
+                                                paths.push_back(buffer.m_pData);
+                                        }
+                                        CoTaskMemFree(absolute);
+                                }
+                        }
+                        GlobalUnlock(medium.hGlobal);
+                }
+                ReleaseStgMedium(&medium);
+        }
+
+        return paths;
+}
+
+HRESULT CAddressBar::PerformFileOperation(const std::vector<std::wstring> &sourcePaths, const std::wstring &targetFolder, bool move) const
+{
+        if (sourcePaths.empty() || targetFolder.empty())
+                return E_INVALIDARG;
+
+        CComPtr<IFileOperation> fileOperation;
+        HRESULT hr = CoCreateInstance(CLSID_FileOperation, nullptr, CLSCTX_ALL, IID_PPV_ARGS(&fileOperation));
+        if (FAILED(hr))
+                return hr;
+
+        DWORD flags = FOFX_SHOWELEVATIONPROMPT | FOF_NOCONFIRMATION | FOF_NOCONFIRMMKDIR | FOF_SILENT;
+        fileOperation->SetOperationFlags(flags);
+
+        CComPtr<IShellItem> destination;
+        hr = SHCreateItemFromParsingName(targetFolder.c_str(), nullptr, IID_PPV_ARGS(&destination));
+        if (FAILED(hr))
+                return hr;
+
+        for (const std::wstring &path : sourcePaths)
+        {
+                CComPtr<IShellItem> source;
+                if (FAILED(SHCreateItemFromParsingName(path.c_str(), nullptr, IID_PPV_ARGS(&source))))
+                        continue;
+
+                if (move)
+                        fileOperation->MoveItem(source, destination, nullptr, nullptr);
+                else
+                        fileOperation->CopyItem(source, destination, nullptr, nullptr);
+        }
+
+        return fileOperation->PerformOperations();
+}
+

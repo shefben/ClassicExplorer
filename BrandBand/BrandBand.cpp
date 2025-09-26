@@ -105,9 +105,53 @@ LRESULT CBrandBand::OnClick(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHand
 
 	AppendMenuW(hMenu, MF_SEPARATOR, 0, 0);
 
-	AppendMenuW(hMenu, (currentSettings.showGoButton ? MF_CHECKED : MF_UNCHECKED) | MF_STRING, 7010, L"Show Go button");
-	AppendMenuW(hMenu, (currentSettings.showAddressLabel ? MF_CHECKED : MF_UNCHECKED) | MF_STRING, 7011, L"Show Address label");
-	AppendMenuW(hMenu, (currentSettings.showFullAddress ? MF_CHECKED : MF_UNCHECKED) | MF_STRING, 7012, L"Show full address");
+        AppendMenuW(hMenu, (currentSettings.showGoButton ? MF_CHECKED : MF_UNCHECKED) | MF_STRING, 7010, L"Show Go button");
+        AppendMenuW(hMenu, (currentSettings.showAddressLabel ? MF_CHECKED : MF_UNCHECKED) | MF_STRING, 7011, L"Show Address label");
+        AppendMenuW(hMenu, (currentSettings.showFullAddress ? MF_CHECKED : MF_UNCHECKED) | MF_STRING, 7012, L"Show full address");
+
+        AppendMenuW(hMenu, MF_SEPARATOR, 0, 0);
+
+        AppendMenuW(hMenu, (currentSettings.tabAutoSize ? MF_CHECKED : MF_UNCHECKED) | MF_STRING, 7020, L"Auto size tabs");
+
+        HMENU hFixedWidthMenu = CreatePopupMenu();
+        const struct
+        {
+                UINT id;
+                LONG width;
+                const wchar_t *label;
+        } widthOptions[] = {
+                {7021, 140, L"140 px"},
+                {7022, 180, L"180 px"},
+                {7023, 220, L"220 px"}
+        };
+        for (const auto &option : widthOptions)
+        {
+                UINT flags = MF_STRING;
+                if (!currentSettings.tabAutoSize && currentSettings.tabFixedWidth == option.width)
+                        flags |= MF_CHECKED;
+                AppendMenuW(hFixedWidthMenu, flags, option.id, option.label);
+        }
+        AppendMenuW(hMenu, MF_POPUP | MF_STRING, (UINT_PTR)hFixedWidthMenu, L"Fixed tab width");
+
+        HMENU hFixedHeightMenu = CreatePopupMenu();
+        const struct
+        {
+                UINT id;
+                LONG height;
+                const wchar_t *label;
+        } heightOptions[] = {
+                {7024, 28, L"28 px"},
+                {7025, 32, L"32 px"},
+                {7026, 36, L"36 px"}
+        };
+        for (const auto &option : heightOptions)
+        {
+                UINT flags = MF_STRING;
+                if (currentSettings.tabFixedHeight == option.height)
+                        flags |= MF_CHECKED;
+                AppendMenuW(hFixedHeightMenu, flags, option.id, option.label);
+        }
+        AppendMenuW(hMenu, MF_POPUP | MF_STRING, (UINT_PTR)hFixedHeightMenu, L"Fixed tab height");
 
 	POINT p;
 	p.x = GET_X_LPARAM(lParam);
@@ -121,10 +165,10 @@ LRESULT CBrandBand::OnClick(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHand
 
 	if(sel == 0) // Current theme selected, or outside click, nothing changes
 		return S_OK;
-	switch (sel)
-	{
-	case 7000:
-		CEUtil::WriteCESettings(CEUtil::CESettings(CLASSIC_EXPLORER_2K, -1, -1,-1));
+        switch (sel)
+        {
+        case 7000:
+                CEUtil::WriteCESettings(CEUtil::CESettings(CLASSIC_EXPLORER_2K, -1, -1,-1));
 		break;
 	case 7001:
 		CEUtil::WriteCESettings(CEUtil::CESettings(CLASSIC_EXPLORER_XP, -1, -1,-1));
@@ -141,10 +185,60 @@ LRESULT CBrandBand::OnClick(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHand
 	case 7011:
 		CEUtil::WriteCESettings(CEUtil::CESettings(CLASSIC_EXPLORER_NONE, -1, !currentSettings.showAddressLabel, -1));
 		break;
-	case 7012:
-		CEUtil::WriteCESettings(CEUtil::CESettings(CLASSIC_EXPLORER_NONE, -1, -1, !currentSettings.showFullAddress));
-		break;
-	}
+        case 7012:
+                CEUtil::WriteCESettings(CEUtil::CESettings(CLASSIC_EXPLORER_NONE, -1, -1, !currentSettings.showFullAddress));
+                break;
+        case 7020:
+                CEUtil::WriteCESettings(CEUtil::CESettings(
+                        CLASSIC_EXPLORER_NONE,
+                        -1,
+                        -1,
+                        -1,
+                        currentSettings.tabAutoSize ? 0 : 1,
+                        currentSettings.tabFixedWidth,
+                        currentSettings.tabFixedHeight));
+                break;
+        case 7021:
+        case 7022:
+        case 7023:
+        {
+                LONG targetWidth = 180;
+                if (sel == 7021)
+                        targetWidth = 140;
+                else if (sel == 7023)
+                        targetWidth = 220;
+
+                CEUtil::WriteCESettings(CEUtil::CESettings(
+                        CLASSIC_EXPLORER_NONE,
+                        -1,
+                        -1,
+                        -1,
+                        0,
+                        targetWidth,
+                        currentSettings.tabFixedHeight));
+                break;
+        }
+        case 7024:
+        case 7025:
+        case 7026:
+        {
+                LONG targetHeight = 32;
+                if (sel == 7024)
+                        targetHeight = 28;
+                else if (sel == 7026)
+                        targetHeight = 36;
+
+                CEUtil::WriteCESettings(CEUtil::CESettings(
+                        CLASSIC_EXPLORER_NONE,
+                        -1,
+                        -1,
+                        -1,
+                        currentSettings.tabAutoSize,
+                        currentSettings.tabFixedWidth,
+                        targetHeight));
+                break;
+        }
+        }
 	MessageBeep(0);
 	MessageBox(L"Open a new file explorer window to see the changes.");
 	return S_OK;

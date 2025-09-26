@@ -19,21 +19,36 @@ enum ClassicExplorerTheme
 
 namespace CEUtil
 {
-	struct CESettings
-	{
-		ClassicExplorerTheme theme = CLASSIC_EXPLORER_NONE;
-		DWORD showGoButton = -1;
-		DWORD showAddressLabel = -1;
-		DWORD showFullAddress = -1;
+        struct CESettings
+        {
+                ClassicExplorerTheme theme = CLASSIC_EXPLORER_NONE;
+                LONG showGoButton = -1;
+                LONG showAddressLabel = -1;
+                LONG showFullAddress = -1;
+                LONG tabAutoSize = -1;
+                LONG tabFixedWidth = -1;
+                LONG tabFixedHeight = -1;
 
-		CESettings(ClassicExplorerTheme t, int a, int b, int f)
-		{
-			theme = t;
-			showGoButton = a;
-			showAddressLabel = b;
-			showFullAddress = f;
-		}
-	};
+                CESettings() = default;
+
+                CESettings(
+                        ClassicExplorerTheme t,
+                        LONG showGo,
+                        LONG showLabel,
+                        LONG showFull,
+                        LONG autoSize = -1,
+                        LONG fixedWidth = -1,
+                        LONG fixedHeight = -1)
+                {
+                        theme = t;
+                        showGoButton = showGo;
+                        showAddressLabel = showLabel;
+                        showFullAddress = showFull;
+                        tabAutoSize = autoSize;
+                        tabFixedWidth = fixedWidth;
+                        tabFixedHeight = fixedHeight;
+                }
+        };
 	CESettings GetCESettings();
 	void WriteCESettings(CESettings& toWrite);
 	HRESULT GetCurrentFolderPidl(CComPtr<IShellBrowser> pShellBrowser, PIDLIST_ABSOLUTE *pidlOut);
