@@ -21,25 +21,9 @@
 
 #include "AddressBarHostBand.h"
 
-std::wstring CAddressBarHostBand::m_addressText = L"";
-
 //================================================================================================================
 // implement IDeskBand:
 //
-
-WCHAR CAddressBarHostBand::GetAddressAccelerator()
-{
-	for (int i = 0; i < m_addressText.length(); i++)
-	{
-		if (m_addressText[i] == L'\0')
-			break;
-
-		if (m_addressText[i - 1] == L'&')
-			return m_addressText[i];
-	}
-
-	return L'\0';
-}
 
 /*
  * GetBandInfo: This is queried by the Shell and must return relevant information about
@@ -47,55 +31,43 @@ WCHAR CAddressBarHostBand::GetAddressAccelerator()
  */
 STDMETHODIMP CAddressBarHostBand::GetBandInfo(DWORD dwBandId, DWORD dwViewMode, DESKBANDINFO *pDbi)
 {
-	RECT rc;
-	SendMessage(m_addressBar.GetToolbar(), TB_GETITEMRECT, 0, (LPARAM)&rc);
-	int minSize = rc.right;
+        UNREFERENCED_PARAMETER(dwBandId);
+        UNREFERENCED_PARAMETER(dwViewMode);
 
-	if (pDbi)
-	{
-		if (pDbi->dwMask & DBIM_MINSIZE)
-		{
-			RECT rcComboBox;
-			GetWindowRect(m_addressBar.m_comboBox, &rcComboBox);
+        if (pDbi)
+        {
+                SIZE desiredSize = m_addressBar.GetDesiredSize();
+                if (pDbi->dwMask & DBIM_MINSIZE)
+                {
+                        pDbi->ptMinSize.x = 200;
+                        pDbi->ptMinSize.y = desiredSize.cy;
+                }
+                if (pDbi->dwMask & DBIM_MAXSIZE)
+                {
+                        pDbi->ptMaxSize.x = 0; // 0 = ignored
+                        pDbi->ptMaxSize.y = -1; // -1 = unlimited
+                }
+                if (pDbi->dwMask & DBIM_INTEGRAL)
+                {
+                        pDbi->ptIntegral.x = 0;
+                        pDbi->ptIntegral.y = 1;
+                }
+                if (pDbi->dwMask & DBIM_ACTUAL)
+                {
+                        pDbi->ptActual.x = desiredSize.cx;
+                        pDbi->ptActual.y = desiredSize.cy;
+                }
+                if (pDbi->dwMask & DBIM_TITLE)
+                {
+                        wcscpy_s(pDbi->wszTitle, L"Explorer Tabs");
+                }
+                if (pDbi->dwMask & DBIM_BKCOLOR)
+                {
+                        pDbi->dwMask &= ~DBIM_BKCOLOR;
+                }
+        }
 
-			pDbi->ptMinSize.x = 150;
-			pDbi->ptMinSize.y = rcComboBox.bottom - rcComboBox.top;
-		}
-		if (pDbi->dwMask & DBIM_MAXSIZE)
-		{
-			pDbi->ptMaxSize.x = 0; // 0 = ignored
-			pDbi->ptMaxSize.y = -1; // -1 = unlimited
-		}
-		if (pDbi->dwMask & DBIM_INTEGRAL)
-		{
-			// Should not be sizeable.
-			pDbi->ptIntegral.x = 0;
-			pDbi->ptIntegral.y = 1;
-		}
-		if (pDbi->dwMask & DBIM_ACTUAL)
-		{
-			pDbi->ptActual.x = rc.right;
-			pDbi->ptActual.y = rc.bottom;
-		}
-		if (pDbi->dwMask & DBIM_TITLE)
-		{
-			CEUtil::CESettings cS = CEUtil::GetCESettings();
-			if (cS.showAddressLabel == 0) //Show no label
-			{
-				wcscpy_s(pDbi->wszTitle, L"");
-				return S_OK;
-			}
-			wcscpy_s(pDbi->wszTitle, m_addressText.c_str());
-			return S_OK;
-		}
-		if (pDbi->dwMask & DBIM_BKCOLOR)
-		{
-			// use default:
-			pDbi->dwMask &= ~DBIM_BKCOLOR;
-		}
-	}
-
-	return S_OK;
+        return S_OK;
 }
 
 //================================================================================================================
@@ -203,25 +175,11 @@ STDMETHODIMP CAddressBarHostBand::SetSite(IUnknown *pUnkSite)
 				}
 			}
 
-			m_addressBar.SetBrowsers(pShellBrowser, m_pWebBrowser);
-			m_addressBar.InitComboBox();
-		}
-		if (m_addressText == L"")
-		{
-			HMODULE explorerframe = LoadLibrary(L"explorerframe.dll");
-			if (explorerframe)
-			{
-				WCHAR* addressText = new WCHAR[32];
-				LoadStringW(explorerframe, 12896, addressText, 32);
-				m_addressText = addressText;
-				delete[] addressText;
-				FreeLibrary(explorerframe);
-			}
-			else
-				m_addressText = L"Error";
-		}
-	}
-	else // unhook:
+                        m_addressBar.SetBrowsers(pShellBrowser, m_pWebBrowser);
+                        m_addressBar.InitializeTabs();
+                }
+        }
+        else // unhook:
 	{
 		m_pSite = NULL;
 		m_parentWindow = NULL;
@@ -236,9 +194,11 @@ STDMETHODIMP CAddressBarHostBand::SetSite(IUnknown *pUnkSite)
 
 STDMETHODIMP CAddressBarHostBand::OnNavigateComplete(IDispatch *pDisp, VARIANT *url)
 {
-	m_addressBar.HandleNavigate();
+        UNREFERENCED_PARAMETER(pDisp);
+        UNREFERENCED_PARAMETER(url);
+        m_addressBar.OnExplorerNavigate();
 
-	return S_OK;
+        return S_OK;
 }
 
 /**
@@ -266,71 +226,25 @@ STDMETHODIMP CAddressBarHostBand::OnQuit()
 
 STDMETHODIMP CAddressBarHostBand::HasFocusIO()
 {
-	if (
-		GetFocus() == m_addressBar.m_comboBoxEditCtl || 
-		::SendMessage(m_addressBar.m_comboBox, CB_GETDROPPEDSTATE, 0, 0)
-	)
-	{
-		return S_OK;
-	}
-	else
-	{
-		return S_FALSE;
-	}
+        return GetFocus() == m_addressBar.GetToolbar() ? S_OK : S_FALSE;
 }
 
 STDMETHODIMP CAddressBarHostBand::TranslateAcceleratorIO(MSG *pMsg)
 {
-	switch (pMsg->message)
-	{
-		case WM_SYSCHAR:
-		{
-			WCHAR szInput[2] = L"\0";
-			szInput[0] = (char)pMsg->wParam;
-
-			WCHAR szAccelerator[2] = L"\0";
-			szAccelerator[0] = GetAddressAccelerator();
-
-			if (lstrcmpiW(szInput, szAccelerator) == 0)
-			{
-				//MessageBoxW(NULL, L"FUCK", L"KILL YOURSELF", MB_OK);
-				::SetFocus(m_addressBar.m_comboBoxEditCtl);
-				return S_OK;
-			}
-		}
-		break;
-	}
-
-	/*if (pMsg->hwnd == m_addressBar.m_comboBoxEditCtl)
-	{
-		switch (pMsg->message)
-		{
-			case WM_SYSKEYDOWN:
-			case WM_SYSKEYUP:
-			case WM_SYSCOMMAND:
-			case WM_SYSDEADCHAR:
-			case WM_SYSCHAR:
-				return S_FALSE;
-		}
-
-		TranslateMessage(pMsg);
-		DispatchMessageW(pMsg);
-
-		return S_OK;
-	}*/
-
-	return S_FALSE;
+        UNREFERENCED_PARAMETER(pMsg);
+        return S_FALSE;
 }
 
 STDMETHODIMP CAddressBarHostBand::UIActivateIO(BOOL fActivate, MSG *pMsg)
 {
-	if (fActivate)
-	{
-		m_pSite->OnFocusChangeIS((IDeskBand *)this, fActivate);
-		::SetFocus(m_addressBar.m_comboBoxEditCtl);
-	}
+        UNREFERENCED_PARAMETER(pMsg);
+        if (fActivate)
+        {
+                m_pSite->OnFocusChangeIS((IDeskBand *)this, fActivate);
+                ::SetFocus(m_addressBar.GetToolbar());
+        }
 
-	return S_OK;
+        return S_OK;
 }
 
 //================================================================================================================
